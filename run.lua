@@ -67,6 +67,9 @@ local nameForPType = {
 	[elf.PT_RISCV_ATTRIBUTES] = 'PT_RISCV_ATTRIBUTES',
 }
 
+-- libelf mixes DT_* for d_tag names
+-- *AND* DT_*NUM for number-of-subtypes of d_tag
+-- *AND* some of the first have NUM suffix so they can be mistaken for the second.
 local nameForDType = {
 	[elf.DT_NULL] = 'DT_NULL',
 	[elf.DT_NEEDED] = 'DT_NEEDED',
@@ -106,12 +109,10 @@ local nameForDType = {
 	[elf.DT_RELRSZ] = 'DT_RELRSZ',
 	[elf.DT_RELR] = 'DT_RELR',
 	[elf.DT_RELRENT] = 'DT_RELRENT',
-	[elf.DT_NUM] = 'DT_NUM',
 	[elf.DT_LOOS] = 'DT_LOOS',
 	[elf.DT_HIOS] = 'DT_HIOS',
 	[elf.DT_LOPROC] = 'DT_LOPROC',
 	[elf.DT_HIPROC] = 'DT_HIPROC',
-	[elf.DT_PROCNUM] = 'DT_PROCNUM',
 	[elf.DT_VALRNGLO] = 'DT_VALRNGLO',
 	[elf.DT_GNU_PRELINKED] = 'DT_GNU_PRELINKED',
 	[elf.DT_GNU_CONFLICTSZ] = 'DT_GNU_CONFLICTSZ',
@@ -125,7 +126,6 @@ local nameForDType = {
 	[elf.DT_SYMINSZ] = 'DT_SYMINSZ',
 	[elf.DT_SYMINENT] = 'DT_SYMINENT',
 	[elf.DT_VALRNGHI] = 'DT_VALRNGHI',
-	[elf.DT_VALNUM] = 'DT_VALNUM',
 	[elf.DT_ADDRRNGLO] = 'DT_ADDRRNGLO',
 	[elf.DT_GNU_HASH] = 'DT_GNU_HASH',
 	[elf.DT_TLSDESC_PLT] = 'DT_TLSDESC_PLT',
@@ -139,7 +139,6 @@ local nameForDType = {
 	[elf.DT_MOVETAB] = 'DT_MOVETAB',
 	[elf.DT_SYMINFO] = 'DT_SYMINFO',
 	[elf.DT_ADDRRNGHI] = 'DT_ADDRRNGHI',
-	[elf.DT_ADDRNUM] = 'DT_ADDRNUM',
 	[elf.DT_VERSYM] = 'DT_VERSYM',
 	[elf.DT_RELACOUNT] = 'DT_RELACOUNT',
 	[elf.DT_RELCOUNT] = 'DT_RELCOUNT',
@@ -148,12 +147,9 @@ local nameForDType = {
 	[elf.DT_VERDEFNUM] = 'DT_VERDEFNUM',
 	[elf.DT_VERNEED] = 'DT_VERNEED',
 	[elf.DT_VERNEEDNUM] = 'DT_VERNEEDNUM',
-	[elf.DT_VERSIONTAGNUM] = 'DT_VERSIONTAGNUM',
 	[elf.DT_AUXILIARY] = 'DT_AUXILIARY',
 	[elf.DT_FILTER] = 'DT_FILTER',
-	[elf.DT_EXTRANUM] = 'DT_EXTRANUM',
 	[elf.DT_SPARC_REGISTER] = 'DT_SPARC_REGISTER',
-	[elf.DT_SPARC_NUM] = 'DT_SPARC_NUM',
 	[elf.DT_MIPS_RLD_VERSION] = 'DT_MIPS_RLD_VERSION',
 	[elf.DT_MIPS_TIME_STAMP] = 'DT_MIPS_TIME_STAMP',
 	[elf.DT_MIPS_ICHECKSUM] = 'DT_MIPS_ICHECKSUM',
@@ -201,27 +197,19 @@ local nameForDType = {
 	[elf.DT_MIPS_RWPLT] = 'DT_MIPS_RWPLT',
 	[elf.DT_MIPS_RLD_MAP_REL] = 'DT_MIPS_RLD_MAP_REL',
 	[elf.DT_MIPS_XHASH] = 'DT_MIPS_XHASH',
-	[elf.DT_MIPS_NUM] = 'DT_MIPS_NUM',
 	[elf.DT_ALPHA_PLTRO] = 'DT_ALPHA_PLTRO',
-	[elf.DT_ALPHA_NUM] = 'DT_ALPHA_NUM',
 	[elf.DT_PPC_GOT] = 'DT_PPC_GOT',
 	[elf.DT_PPC_OPT] = 'DT_PPC_OPT',
-	[elf.DT_PPC_NUM] = 'DT_PPC_NUM',
 	[elf.DT_PPC64_GLINK] = 'DT_PPC64_GLINK',
 	[elf.DT_PPC64_OPD] = 'DT_PPC64_OPD',
 	[elf.DT_PPC64_OPDSZ] = 'DT_PPC64_OPDSZ',
 	[elf.DT_PPC64_OPT] = 'DT_PPC64_OPT',
-	[elf.DT_PPC64_NUM] = 'DT_PPC64_NUM',
 	[elf.DT_AARCH64_BTI_PLT] = 'DT_AARCH64_BTI_PLT',
 	[elf.DT_AARCH64_PAC_PLT] = 'DT_AARCH64_PAC_PLT',
 	[elf.DT_AARCH64_VARIANT_PCS] = 'DT_AARCH64_VARIANT_PCS',
-	[elf.DT_AARCH64_NUM] = 'DT_AARCH64_NUM',
-	[elf.DT_IA_64_PLT_RESERVE] = 'DT_IA_64_PLT_RESERVE',
-	[elf.DT_IA_64_NUM] = 'DT_IA_64_NUM',
 	[elf.DT_X86_64_PLT] = 'DT_X86_64_PLT',
 	[elf.DT_X86_64_PLTSZ] = 'DT_X86_64_PLTSZ',
 	[elf.DT_X86_64_PLTENT] = 'DT_X86_64_PLTENT',
-	[elf.DT_X86_64_NUM] = 'DT_X86_64_NUM',
 	[elf.DT_NIOS2_GP] = 'DT_NIOS2_GP',
 	[elf.DT_RISCV_VARIANT_CC] = 'DT_RISCV_VARIANT_CC',
 }
@@ -314,8 +302,8 @@ local nameForSHType = {
 	[elf.SHT_ARM_PREEMPTMAP] = 'SHT_ARM_PREEMPTMAP',
 	[elf.SHT_ARM_ATTRIBUTES] = 'SHT_ARM_ATTRIBUTES',
 	[elf.SHT_CSKY_ATTRIBUTES] = 'SHT_CSKY_ATTRIBUTES',
-	[elf.SHT_IA_64_EXT] = 'SHT_IA_64_EXT',
-	[elf.SHT_IA_64_UNWIND] = 'SHT_IA_64_UNWIND',
+	[elf.SHT_IA_64_EXT] = 'SHT_IA_64_EXT',			-- = SHT_LOPROC
+	[elf.SHT_IA_64_UNWIND] = 'SHT_IA_64_UNWIND',	-- = SHT_LOPROC + 1
 	[elf.SHT_X86_64_UNWIND] = 'SHT_X86_64_UNWIND',
 	[elf.SHT_RISCV_ATTRIBUTES] = 'SHT_RISCV_ATTRIBUTES',
 	[elf.SHT_ARC_ATTRIBUTES] = 'SHT_ARC_ATTRIBUTES',
@@ -343,13 +331,6 @@ end
 local function writeField(ptr, field)
 	io.write(field, '=', inttohex(ptr[field]))	-- cast to ptr for quick hex intptr_t formatting
 end
-local function printField(...)
-	io.write'\t'
-	writeField(...)
-	print()
-end
-
-
 
 
 local filename = assert((...), "expected filename")
@@ -376,7 +357,7 @@ else
 end
 
 assert.eq(ek, elf.ELF_K_ELF, 'must be an ELF object')
-	
+
 local ehdr = ffi.new'GElf_Ehdr[1]'
 elfassertne(elf.gelf_getehdr(e, ehdr), ffi.null, 'gelf_getehdr')
 
@@ -394,7 +375,9 @@ for _,field in ipairs{
 	'e_type', 'e_machine', 'e_version', 'e_entry', 'e_phoff', 'e_shoff', 'e_flags',
 	'e_ehsize', 'e_phentsize', 'e_phnum', 'e_shentsize', 'e_shnum', 'e_shstrndx'
 } do
-	printField(ehdr[0], field)
+	io.write' '
+	writeField(ehdr[0], field)
+	print()
 end
 
 local n = ffi.new'size_t[1]'
@@ -414,28 +397,32 @@ print(' (phnum) '..inttohex(n[0]))
 --local shdr_shstrtab = ffi.cast('Elf64_Shdr*', elfdataptr + (ehdr[0].e_shoff + ehdr[0].e_shentsize * ehdr[0].e_shstrndx))
 -- now from shdr_shstrtab there are `e_shnum` headers ... I think that's the next section with `elf_nextscn`...
 
+local shdr_dynstr 	-- the section header whose sh_type is SHT_STRTAB
 do
 	local scn = ffi.null
 	local shdr = ffi.new'GElf_Shdr[1]'
-	local shdr_dynstr 
 	while true do
 		scn = elf.elf_nextscn(e, scn)
 		if scn == ffi.null then break end
 		elfasserteq(elf.gelf_getshdr(scn, shdr), shdr, 'elf_getshdr')
-		local name = elfassertne(elf.elf_strptr(e, shstrndx, shdr[0].sh_name), ffi.null, 'elf_strptr')
-		
+		local nameptr = elfassertne(elf.elf_strptr(e, shstrndx, shdr[0].sh_name), ffi.null, 'elf_strptr')
+		local name = ffi.string(nameptr)
+
 		io.write(' section ', tostring(tonumber(elf.elf_ndxscn(scn))))
 		for _,field in ipairs{'sh_flags', 'sh_addr', 'sh_offset', 'sh_size', 'sh_link', 'sh_info', 'sh_addralign', 'sh_entsize'} do
-			io.write(' ', field, '=', inttohex(shdr[0][field])) 
+			io.write(' ', field, '=', inttohex(shdr[0][field]))
 		end
 		io.write(' sh_type='..inttohex(shdr[0].sh_type)..'/'..(nameForSHType[tonumber(shdr[0].sh_type)] or 'unknown'))
-		io.write(' name="'..ffi.string(name)..'"')
+		io.write(' name="'..name..'"')
 		print()
 
 		if shdr[0].sh_type == elf.SHT_STRTAB then
 			-- ... then this header is shdr_dynstr, holds the strings of SHT_DYNAMIC
 			-- will this always go before SHT_DYNAMIC ?
-			shdr_dynstr = ffi.new('GElf_Shdr', shdr[0])	-- is scn allocated?  will this pointer go bad? will its members?
+			-- oh yeah there are multiple of these too, with names '.dynstr', '.strtab', '.shstrtab'
+			if name == '.dynstr' then
+				shdr_dynstr = ffi.new('GElf_Shdr', shdr[0])	-- is scn allocated?  will this pointer go bad? will its members?
+			end
 		end
 
 		if shdr[0].sh_type == elf.SHT_DYNAMIC then
@@ -452,9 +439,9 @@ do
 				writeField(dyn[0].d_un, 'd_ptr')        -- Elf64_Xword, or d_ptr Elf64_Addr
 				io.write(' d_tag='..inttohex(dyn[0].d_tag)..'/'..(nameForDType[tonumber(dyn[0].d_tag)] or 'unknown'))
 				print()
-				
+
 				if dyn[0].d_tag == elf.DT_NEEDED then
-					assert(shdr_dynstr, "read SHT_DYNAMIC without SHT_STRTAB") 
+					assert(shdr_dynstr, "read SHT_DYNAMIC without SHT_STRTAB")
 					local p = elfdataptr + shdr_dynstr.sh_offset + dyn[0].d_un.d_val
 					print("   DT_NEEDED: ", ffi.string(p));
 				end
@@ -502,6 +489,25 @@ for i=0,phdrnum-1 do
 
 	-- https://stackoverflow.com/a/78179985
 	if phdr[0].p_type == elf.PT_DYNAMIC then
+		local dyncount = tonumber(phdr[0].p_filesz / ffi.sizeof'Elf64_Dyn')
+		local dyns = ffi.cast('Elf64_Dyn*', elfdataptr + phdr[0].p_offset)
+		for i=0,dyncount-1 do
+
+			local dyn = dyns + i
+			io.write('  dyn #'..i)
+			io.write' '
+			writeField(dyn[0].d_un, 'd_ptr')        -- Elf64_Xword, or d_ptr Elf64_Addr
+			io.write(' d_tag='..inttohex(dyn[0].d_tag)..'/'..(nameForDType[tonumber(dyn[0].d_tag)] or 'unknown'))
+			print()
+
+			if dyn[0].d_tag == elf.DT_NULL then break end
+			if dyn[0].d_tag == elf.DT_NEEDED then
+				assert(shdr_dynstr, 'read PT_DYNAMIC without SHT_STRTAB')
+				local sofs = shdr_dynstr.sh_offset + dyn[0].d_un.d_val
+				local sptr = elfdataptr + sofs
+				print("  DT_NEEDED: "..inttohex(sofs)..' '..ffi.string(sptr))
+			end
+		end
 	end
 end
 
