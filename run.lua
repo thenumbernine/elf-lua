@@ -13,6 +13,20 @@ local elf = require 'ffi.req' 'elf'
 local tolua = require 'ext.tolua'
 require 'ffi.req' 'c.fcntl'
 
+local nameForClass = {
+	[elf.ELFCLASSNONE] = 'ELFCLASSNONE',
+	[elf.ELFCLASS32] = 'ELFCLASS32',
+	[elf.ELFCLASS64] = 'ELFCLASS64',
+	[elf.ELFCLASSNUM] = 'ELFCLASSNUM',
+}
+
+local nameforEType = {
+	[elf.ELF_K_NONE] = 'ELF_K_NONE',
+	[elf.ELF_K_AR] = 'ELF_K_AR',
+	[elf.ELF_K_COFF] = 'ELF_K_COFF',
+	[elf.ELF_K_ELF] = 'ELF_K_ELF',
+}
+
 local nameForPType = {
 	[elf.PT_NULL] = 'PT_NULL',
 	[elf.PT_LOAD] = 'PT_LOAD',
@@ -343,58 +357,27 @@ print('file size', inttohex(#elfdatastr))
 
 local e = assert.ne(elf.elf_memory(elfdataptr, #elfdatastr), ffi.null, 'elf_memory')
 
-local ek = elf.elf_kind(e)
-print('ek', ek)
+local ehdr = ffi.cast('GElf_Ehdr*', elfdataptr)
 
-if ek == elf.ELF_K_AR then
-	print'ar(1) archive'
-elseif ek == elf.ELF_K_ELF then
-	print'elf object'
-elseif ek == elf.ELF_K_NONE then
-	print'data'
-else
-	print'unrecognized'
-end
+print('elf e_type = '..ehdr.e_type..'/'..(nameforEType[ehdr.e_type] or 'unknown'))
+assert.eq(ehdr.e_type, elf.ELF_K_ELF, 'must be an ELF object')
 
-assert.eq(ek, elf.ELF_K_ELF, 'must be an ELF object')
-
-local ehdr = ffi.new'GElf_Ehdr[1]'
-elfassertne(elf.gelf_getehdr(e, ehdr), ffi.null, 'gelf_getehdr')
-
-print((
-	elfassertne(elf.gelf_getclass(e), elf.ELFCLASSNONE, 'gelf_getclass')
-	== elf.ELFCLASS32 and '32' or '64')..'-bit ELF object')
-
-local id = elfassertne(elf.elf_getident(e, ffi.null), ffi.null, 'elf_getident')
-
-print('e_ident[0..'..elf.EI_ABIVERSION..']', string.hexdump(ffi.string(id, 8)))
+print('elf class = '..ehdr.e_ident[elf.EI_CLASS]..'/'..(nameForClass[ehdr.e_ident[elf.EI_CLASS]] or 'unknown'))
+print('e_ident[0..'..elf.EI_ABIVERSION..'] = '..tolua(ffi.string(ffi.cast('char*', ehdr.e_ident), elf.EI_ABIVERSION)))
 
 print()
-print'Elf header'
+print'elf header'
 for _,field in ipairs{
 	'e_type', 'e_machine', 'e_version', 'e_entry', 'e_phoff', 'e_shoff', 'e_flags',
 	'e_ehsize', 'e_phentsize', 'e_phnum', 'e_shentsize', 'e_shnum', 'e_shstrndx'
 } do
 	io.write' '
-	writeField(ehdr[0], field)
+	writeField(ehdr, field)
 	print()
 end
 
-local n = ffi.new'size_t[1]'
-elfasserteq(elf.elf_getshdrnum(e, n), 0, 'elf_getshdrnum')
-local shdrnum = n[0]
-print(' (shnum) '..inttohex(n[0]))
-
-elfasserteq(elf.elf_getshdrstrndx(e, n), 0, 'elf_getshdrstrndx')
-print(' (shstrndx) '..inttohex(n[0]))
-local shstrndx = n[0]
-
-elfasserteq(elf.elf_getphdrnum(e, n), 0, 'elf_getphdrnum')
-local phdrnum = tonumber(n[0])
-print(' (phnum) '..inttohex(n[0]))
-
 -- all sections headers:
-local shdrs = ffi.cast('GElf_Shdr*', elfdataptr + ehdr[0].e_shoff)
+local shdrs = ffi.cast('GElf_Shdr*', elfdataptr + ehdr.e_shoff)
 
 local shdr_dynamic 	-- sh_type == SHT_DYNAMIC
 local shdr_dynstr	-- sh_type == SHT_STRTAB and name == .dynstr
@@ -407,14 +390,13 @@ local shdr_verneed	-- sh_type == SHT_GNU_verneed
 do
 	print()
 	print'Sections:'
-	for i=1,tonumber(shstrndx)-1 do		-- is section #0 always empty?
-		local scn = elfassertne(elf.elf_getscn(e, i), ffi.null, 'elf_getscn')
+	for i=1,ehdr.e_shstrndx-1 do		-- is section #0 always empty?
 		local shdr = shdrs + i
 
-		local nameptr = elfassertne(elf.elf_strptr(e, shstrndx, shdr.sh_name), ffi.null, 'elf_strptr')
+		local nameptr = elfassertne(elf.elf_strptr(e, ehdr.e_shstrndx, shdr.sh_name), ffi.null, 'elf_strptr')
 		local name = ffi.string(nameptr)
 
-		io.write('#', tostring(tonumber(elf.elf_ndxscn(scn))))
+		io.write('#'..i..' shdr=@'..inttohex(ffi.cast('uint8_t*', shdr) - elfdataptr))
 		for _,field in ipairs{'sh_flags', 'sh_addr', 'sh_offset', 'sh_size', 'sh_link', 'sh_info', 'sh_addralign', 'sh_entsize'} do
 			io.write(' ', field, '=', inttohex(shdr[field]))
 		end
@@ -474,29 +456,30 @@ do
 			for i=0,count-1 do
 				local dyn = dyns + i
 
-				io.write('  dyn #'..i)
+				io.write(' dyn #'..i..' @'..inttohex(ffi.cast('uint8_t*', dyn) - elfdataptr))
 				io.write' '
 				writeField(dyn.d_un, 'd_ptr')
-				io.write(' d_tag='..inttohex(dyn.d_tag)..'/'..(nameForDType[tonumber(dyn[0].d_tag)] or 'unknown'))
+				io.write(' d_tag='..inttohex(dyn.d_tag)..'/'..(nameForDType[tonumber(dyn.d_tag)] or 'unknown'))
 				print()
 
 				if dyn.d_tag == elf.DT_NEEDED then
 					assert(shdr_dynstr, "read SHT_DYNAMIC without SHT_STRTAB")
-					print("   DT_NEEDED: ", ffi.string(elfdataptr + shdr_dynstr.sh_offset + dyn.d_un.d_val));
+					print("  DT_NEEDED: ", ffi.string(elfdataptr + shdr_dynstr.sh_offset + dyn.d_un.d_val));
 				elseif dyn.d_tag == elf.DT_VERNEED then
-					-- offset into ?
+					-- dyn.d_ptr == shdr[SHT_GNU_verneed / .gnu.version_r]'s sh_addr & sh_offset
 				elseif dyn.d_tag == elf.DT_VERNEEDNUM then
 					-- only 3 in my example
 				elseif dyn.d_tag == elf.DT_VERSYM then
+					-- dyn.d_ptr == shdr[SHT_GNU_versym / .gnu.version]'s sh_addr & sh_offset
 				end
 			end
 		end
 	end
-	print()
 
-	-- last section?
-	local scn = elfassertne(elf.elf_getscn(e, shstrndx), ffi.null, 'elf_getscn')
-	local shdr = shdrs + shstrndx
+	--[=[ very last section - holds the null-term section names above
+	local scn = elfassertne(elf.elf_getscn(e, ehdr.e_shstrndx), ffi.null, 'elf_getscn')
+	local shdr = shdrs + ehdr.e_shstrndx
+	print()
 	print('shstrab size', inttohex(shdr.sh_size))
 	local data
 	local n = 0
@@ -506,8 +489,48 @@ do
 		print('shstrab data', ffi.string(ffi.cast('char*', data.d_buf), data.d_size))
 		n = n + data.d_size
 	end
+	--]=]
+
+	if shdr_versym then
+		local versym = ffi.cast('Elf64_Versym*', elfdataptr + shdr_versym.sh_offset)
+
+		--[[ TODO this is wrong
+		if shdr_verneed then
+			assert.eq(shdr_verneed.sh_size % ffi.sizeof'Elf64_Verneed', 0)
+
+			print'VerNeed:'
+			local vnptr = elfdataptr + shdr_verneed.sh_offset
+			-- TODO do we go by verneed_count or do we go by vn_next?
+			local verneed_count = tonumber(shdr_verneed.sh_size / ffi.sizeof'Elf64_Verneed')
+			for i=0,verneed_count-1 do
+				local verneed = ffi.cast('Elf64_Verneed*', vnptr)
+				io.write(' #'..i)
+				for _,field in ipairs{'vn_version', 'vn_cnt', 'vn_file', 'vn_aux', 'vn_next'} do
+					io.write' '
+					writeField(verneed, field)
+				end
+				print()
+
+				-- vn_aux points to an Elf64_Vernaux structure ...
+				-- and those have more stuff in them
+
+				if verneed.vn_next == 0 then break end
+				vnptr = vnptr + verneed.vn_next
+				-- vn_next is offeset to next entry or what?
+			end
+		end
+		--]]
+
+		print'Versions:'
+		local count = tonumber(shdr_versym.sh_size / shdr_versym.sh_entsize)
+		for i=0,count-1 do
+			print(' #'..i..' '..versym[i])
+			-- where is versym[i] an offset into?
+		end
+	end
 
 	-- https://compilepeace.github.io/BINARY_DISSECTION_COURSE/ELF/SYMBOLS/SYMBOLS.html
+	-- SHT_DYNSYM/.dynsym + SHT_STRTAB/.dynstr
 	if shdr_dynstr and shdr_dynsym then
 		local dynsym = ffi.cast('GElf_Sym*', elfdataptr + shdr_dynsym.sh_offset)
 		local dynsym_size = shdr_dynsym.sh_size
@@ -553,6 +576,7 @@ do
 	end
 	print()
 
+	-- SHT_STRTAB/.strtab + SHT_SYMTAB/.symtab
 	if shdr_strtab and shdr_symtab then
 		local symtab = ffi.cast('GElf_Sym*', elfdataptr + shdr_symtab.sh_offset)
 		local symtab_size = shdr_symtab.sh_size
@@ -577,7 +601,7 @@ end
 
 print()
 print'Program Headers:'
-for i=0,phdrnum-1 do
+for i=0,ehdr.e_phnum-1 do
 	local phdr = ffi.new'GElf_Phdr[1]'
 	elfasserteq(elf.gelf_getphdr(e, i, phdr), phdr, 'gelf_getphdr')
 
