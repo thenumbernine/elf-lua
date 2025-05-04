@@ -396,90 +396,91 @@ print(' (phnum) '..inttohex(n[0]))
 -- all sections headers:
 local shdrs = ffi.cast('Elf64_Shdr*', elfdataptr + ehdr[0].e_shoff)
 
-local shdr_dynstr				 	-- sh_type == SHT_STRTAB and name == .dynstr
-local dynsym, dynsym_size -- sh_type == SHT_DYNSYM and name == .dynsym
+local shdr_dynstr	-- sh_type == SHT_STRTAB and name == .dynstr
+local shdr_dynsym 	-- sh_type == SHT_DYNSYM and name == .dynsym
 local shdr_symtab, symtab, symtab_size, symtab_count	-- sh_type == SHT_SYMTAB and name == .symtab
 local shdr_strtab				-- sh_type == SHT_STRTAB and name == .strtab
+local shdr_versym 				-- sh_type == SHT_GNU_versym
+local shdr_verdef				-- sh_type == SHT_GNU_verdef
+local shdr_verneed				-- sh_type == SHT_GNU_verneed
 do
 	print()
 	print'Sections:'
-	--local shdr = ffi.new'GElf_Shdr[1]'
 	for i=1,tonumber(shstrndx)-1 do		-- is section #0 always empty?
 		local scn = elfassertne(elf.elf_getscn(e, i), ffi.null, 'elf_getscn')
-		--elfasserteq(elf.gelf_getshdr(scn, shdr), shdr, 'elf_getshdr')
 		local shdr = shdrs + i
 
-		local nameptr = elfassertne(elf.elf_strptr(e, shstrndx, shdr[0].sh_name), ffi.null, 'elf_strptr')
+		local nameptr = elfassertne(elf.elf_strptr(e, shstrndx, shdr.sh_name), ffi.null, 'elf_strptr')
 		local name = ffi.string(nameptr)
 
 		io.write('#', tostring(tonumber(elf.elf_ndxscn(scn))))
 		for _,field in ipairs{'sh_flags', 'sh_addr', 'sh_offset', 'sh_size', 'sh_link', 'sh_info', 'sh_addralign', 'sh_entsize'} do
 			io.write(' ', field, '=', inttohex(shdr[0][field]))
 		end
-		io.write(' sh_type='..inttohex(shdr[0].sh_type)..'/'..(nameForSHType[tonumber(shdr[0].sh_type)] or 'unknown'))
+		io.write(' sh_type='..inttohex(shdr.sh_type)..'/'..(nameForSHType[tonumber(shdr.sh_type)] or 'unknown'))
 		io.write(' name="'..name..'"')
 		print()
 
-		if shdr[0].sh_type == elf.SHT_STRTAB
+		if shdr.sh_type == elf.SHT_STRTAB
 		and name == '.dynstr'
 		then
 			-- ... then this header is shdr_dynstr, holds the strings of SHT_DYNAMIC
 			-- will this always go before SHT_DYNAMIC ?
 			-- oh yeah there are multiple of these too, with names '.dynstr', '.strtab', '.shstrtab'
-			shdr_dynstr = ffi.new('GElf_Shdr', shdr[0])	-- is scn allocated?  will this pointer go bad? will its members?
+			assert(not shdr_dynstr)
+			shdr_dynstr = shdr	-- is scn allocated?  will this pointer go bad? will its members?
 		end
 
 		-- dynamic linker symbol table
 		-- "Currently, an object file may have either a section of SHT_SYMTAB type or a section of SHT_DYNSYM type, but not both"
 		-- do if there's a SHT_SYMTAB then there's no SHT_DYMSYM ... is there no SHT_GNU_versym as well?  Where's the version info?
-		if shdr[0].sh_type == elf.SHT_DYNSYM 
+		if shdr.sh_type == elf.SHT_DYNSYM 
 		and name == '.dynsym'
 		then
-			dynsym = ffi.cast('Elf64_Sym*', elfdataptr + shdr[0].sh_offset)
-			dynsym_size = shdr[0].sh_size
+			assert(not shdr_dynsym)
+			shdr_dynsym = shdr
 		end
 
 		-- .symtab
-		if shdr[0].sh_type == elf.SHT_SYMTAB 
+		if shdr.sh_type == elf.SHT_SYMTAB 
 		and name == '.symtab'
 		then
-			shdr_symtab = ffi.new('GElf_Shdr', shdr[0])
+			assert(not shdr_symtab)
+			shdr_symtab = shdr
 			symtab = ffi.cast('Elf64_Sym*', elfdataptr + shdr_symtab.sh_offset)
 			symtab_size = shdr_symtab.sh_size
-			symtab_count = shdr_symtab.sh_size / shdr[0].sh_entsize
+			symtab_count = shdr_symtab.sh_size / shdr.sh_entsize
 		end
 		
 		-- .strtab
-		if shdr[0].sh_type == elf.SHT_STRTAB 
+		if shdr.sh_type == elf.SHT_STRTAB 
 		and name == '.strtab'
 		then
-			shdr_strtab	 = ffi.new('GElf_Shdr', shdr[0])
+			assert(not shdr_strtab)
+			shdr_strtab = shdr
 		end
 
 		-- https://refspecs.linuxfoundation.org/LSB_3.1.1/LSB-Core-generic/LSB-Core-generic/symversion.html
-		-- "The special section .gnu.version which has a section type of SHT_GNU_versym shall contain the Symbol Version Table. This section shall have the same number of entries as the Dynamic Symbol Table in the .dynsym section."
+		-- "The special section .gnu.version which has a section type of SHT_GNU_versym shall contain the Symbol Version Table. 
+		--  This section shall have the same number of entries as the Dynamic Symbol Table in the .dynsym section."
 		-- but I don't see any in mine ...
-		if shdr[0].sh_type == elf.SHT_GNU_versym then
-			local data = elfassertne(elf.elf_getdata(scn, ffi.null), ffi.null, 'elf_getdata')
-			local offset = 0
-			for cnt=tonumber(shdr[0].sh_info)-1,0,-1 do
-				local def = ffi.new'GElf_Verdef[1]'
-				elfasserteq(elf.gelf_getverdef(data, offset, def), def, 'gelf_getverdef')
-				
-				io.write('  verdef #'..cnt)
-				for _,field in ipairs{'vd_version', 'vd_flags', 'vd_ndx', 'vd_cnt', 'vd_hash', 'vd_aux', 'vd_next'} do
-					writeField(verdef[0], field)
-				end
-				print()
-
-				offset = offset + def[0].vd_next
-			end
+		if shdr.sh_type == elf.SHT_GNU_versym then
+			assert(not shdr_versym)
+			shdr_versym = shdr
+		end
+		if shdr.sh_type == elf.SHT_GNU_verdef then
+			assert(not shdr_verdef)
+			shdr_verdef = shdr
+		end
+		if shdr.sh_type == elf.SHT_GNU_verneed then
+			assert(not shdr_verneed)
+			shdr_verneed = shdr
 		end
 
-		if shdr[0].sh_type == elf.SHT_DYNAMIC then
+		if shdr.sh_type == elf.SHT_DYNAMIC then
 			local data = elfassertne(elf.elf_getdata(scn, ffi.null), ffi.null, 'elf_getdata')
 			local sh_entsize = elf.gelf_fsize(e, elf.ELF_T_DYN, 1, elf.EV_CURRENT)
-			for i=0,tonumber(shdr[0].sh_size/sh_entsize)-1 do
+			for i=0,tonumber(shdr.sh_size/sh_entsize)-1 do
 				local dyn = ffi.new'GElf_Dyn[1]'
 				elfasserteq(elf.gelf_getdyn(data, i, dyn), dyn, 'gelf_getdyn')
 
@@ -501,18 +502,21 @@ do
 	-- last section?
 	local scn = elfassertne(elf.elf_getscn(e, shstrndx), ffi.null, 'elf_getscn')
 	local shdr = shdrs + shstrndx
-	print('shstrab size', inttohex(shdr[0].sh_size))
+	print('shstrab size', inttohex(shdr.sh_size))
 	local data
 	local n = 0
-	while n < shdr[0].sh_size do
+	while n < shdr.sh_size do
 		local data = elf.elf_getdata(scn, data)
 		if data == ffi.null then break end
-		print('shstrab data', ffi.string(ffi.cast('char*', data[0].d_buf), data[0].d_size))
-		n = n + data[0].d_size
+		print('shstrab data', ffi.string(ffi.cast('char*', data.d_buf), data.d_size))
+		n = n + data.d_size
 	end
 
 	-- https://compilepeace.github.io/BINARY_DISSECTION_COURSE/ELF/SYMBOLS/SYMBOLS.html
-	if shdr_dynstr and dynsym then
+	if shdr_dynstr and shdr_dynsym then
+		
+		local dynsym = ffi.cast('Elf64_Sym*', elfdataptr + shdr_dynsym.sh_offset)
+		local dynsym_size = shdr_dynsym.sh_size
 		local dynstr = elfdataptr + shdr_dynstr.sh_offset
 		print()
 		print'Dynamic Symbols:'
@@ -525,6 +529,17 @@ do
 			end
 			io.write(' '..ffi.string(dynstr + p.st_name))
 			print()
+			
+			if shdr_versym then
+				local verdef = ffi.cast('GElf_Verdef*', elfdataptr + shdr_versym.sh_offset) + i
+			
+				io.write(' verdef: ')
+				for _,field in ipairs{'vd_version', 'vd_flags', 'vd_ndx', 'vd_cnt', 'vd_hash', 'vd_aux', 'vd_next'} do
+					io.write' '
+					writeField(verdef[0], field)
+				end
+				print()
+			end
 		end
 	end
 	print()
@@ -578,14 +593,14 @@ for i=0,phdrnum-1 do
 			local dyn = dyns + i
 			io.write('  dyn #'..i)
 			io.write' '
-			writeField(dyn[0].d_un, 'd_ptr')        -- Elf64_Xword, or d_ptr Elf64_Addr
-			io.write(' d_tag='..inttohex(dyn[0].d_tag)..'/'..(nameForDType[tonumber(dyn[0].d_tag)] or 'unknown'))
+			writeField(dyn.d_un, 'd_ptr')        -- Elf64_Xword, or d_ptr Elf64_Addr
+			io.write(' d_tag='..inttohex(dyn.d_tag)..'/'..(nameForDType[tonumber(dyn.d_tag)] or 'unknown'))
 			print()
 
-			if dyn[0].d_tag == elf.DT_NULL then break end
-			if dyn[0].d_tag == elf.DT_NEEDED then
+			if dyn.d_tag == elf.DT_NULL then break end
+			if dyn.d_tag == elf.DT_NEEDED then
 				assert(shdr_dynstr, 'read PT_DYNAMIC without SHT_STRTAB')
-				local sofs = shdr_dynstr.sh_offset + dyn[0].d_un.d_val
+				local sofs = shdr_dynstr.sh_offset + dyn.d_un.d_val
 				local sptr = elfdataptr + sofs
 				print("  DT_NEEDED: "..inttohex(sofs)..' '..ffi.string(sptr))
 			end
