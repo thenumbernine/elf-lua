@@ -8,6 +8,7 @@
 local ffi = require 'ffi'
 local assert = require 'ext.assert'
 local path = require 'ext.path'
+local string = require 'ext.string'
 local elf = require 'ffi.req' 'elf'
 local tolua = require 'ext.tolua'
 require 'ffi.req' 'c.fcntl'
@@ -114,19 +115,17 @@ print((i == elf.ELFCLASS32 and '32' or '64')..'-bit ELF object')
 
 local id = elfassertne(elf.elf_getident(e, ffi.null), ffi.null, 'elf_getident')
 
-print('   e_ident[0..'..elf.EI_ABIVERSION..']')
-for i=0,elf.EI_ABIVERSION-1 do
-	print(' ['..tolua(string.char(id[i]))..' '..id[i]..']')
-end
+print('   e_ident[0..'..elf.EI_ABIVERSION..']', string.hexdump(ffi.string(id, 8)))
 
 local function inttohex(x)
 	return tostring(ffi.cast('void*', x)):match'^cdata<void %*>: (.*)'
 end
 
 local function writeField(ptr, field)
-	io.write('\t', field, '\t', inttohex(ptr[field]))	-- cast to ptr for quick hex intptr_t formatting
+	io.write(field, '=', inttohex(ptr[field]))	-- cast to ptr for quick hex intptr_t formatting
 end
 local function printField(...)
+	io.write'\t'
 	writeField(...)
 	print()
 end
@@ -180,38 +179,38 @@ elfasserteq(elf.elf_getphdrnum(e, n), 0, 'elf_getphdrnum')
 local phdrnum = tonumber(n[0])
 print(' (phnum) '..inttohex(n[0]))
 
+print'Program Headers:'
 for i=0,phdrnum-1 do
 	local phdr = ffi.new'GElf_Phdr[1]'
 	elfasserteq(elf.gelf_getphdr(e, i, phdr), phdr, 'gelf_getphdr')
 
-	print('PHDR', i);
-
-	print('', 'p_type', inttohex(phdr[0].p_type), nameForPType[phdr[0].p_type] or 'unknown')
-
-	printField(phdr[0], 'p_offset')
-	printField(phdr[0], 'p_vaddr')
-	printField(phdr[0], 'p_paddr')
-	printField(phdr[0], 'p_filesz')
-	printField(phdr[0], 'p_memsz')
-	printField(phdr[0], 'p_flags')
-    io.write'\t['
-	if bit.band(phdr[0].p_flags, elf.PF_X) ~= 0 then io.write(' execute') end
-	if bit.band(phdr[0].p_flags, elf.PF_R) ~= 0 then io.write(' read') end
-	if bit.band(phdr[0].p_flags, elf.PF_W) ~= 0 then io.write(' write') end
-	print(' ]')
-	printField(phdr[0], 'p_align')
+	io.write('#'..i)
+	io.write' ' writeField(phdr[0], 'p_offset')
+	io.write' ' writeField(phdr[0], 'p_vaddr')
+	io.write' ' writeField(phdr[0], 'p_paddr')
+	io.write' ' writeField(phdr[0], 'p_filesz')
+	io.write' ' writeField(phdr[0], 'p_memsz')
+	io.write' ' writeField(phdr[0], 'p_flags')
+    io.write'['
+	if bit.band(phdr[0].p_flags, elf.PF_X) ~= 0 then io.write'x' end
+	if bit.band(phdr[0].p_flags, elf.PF_R) ~= 0 then io.write'r' end
+	if bit.band(phdr[0].p_flags, elf.PF_W) ~= 0 then io.write'w' end
+	io.write']'
+	io.write' ' writeField(phdr[0], 'p_align')
+	io.write(' p_type='..inttohex(phdr[0].p_type)..' / '..(nameForPType[phdr[0].p_type] or 'unknown'))
+	print()
 
 	if phdr[0].p_type == elf.PT_DYNAMIC then
-		print('\t\t', 'dynamic:')
+		print(' dynamic:')
 		local dyndata = ffi.cast('Elf_Data*', elfdataptr + phdr[0].p_offset)
 		local dyn = ffi.new'GElf_Dyn[1]'
 		local j = 0
 		repeat
 			elf.gelf_getdyn(dyndata, j, dyn)
-			io.write('\t\t', 'dyn #'..j, '\t')
+			io.write('  dyn #'..j, '\t')
 			writeField(dyn[0], 'd_tag')	-- Elf64_Sxword
 			-- then union of d_val or d_ptr
-			io.write'\t'
+			io.write' '
 			writeField(dyn[0].d_un, 'd_val')	-- Elf64_Xword, or d_ptr Elf64_Addr
 			print()
 			j=j+1
