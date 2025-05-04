@@ -398,11 +398,11 @@ local shdrs = ffi.cast('Elf64_Shdr*', elfdataptr + ehdr[0].e_shoff)
 
 local shdr_dynstr	-- sh_type == SHT_STRTAB and name == .dynstr
 local shdr_dynsym 	-- sh_type == SHT_DYNSYM and name == .dynsym
-local shdr_symtab, symtab, symtab_size, symtab_count	-- sh_type == SHT_SYMTAB and name == .symtab
-local shdr_strtab				-- sh_type == SHT_STRTAB and name == .strtab
-local shdr_versym 				-- sh_type == SHT_GNU_versym
-local shdr_verdef				-- sh_type == SHT_GNU_verdef
-local shdr_verneed				-- sh_type == SHT_GNU_verneed
+local shdr_symta	-- sh_type == SHT_SYMTAB and name == .symtab
+local shdr_strtab	-- sh_type == SHT_STRTAB and name == .strtab
+local shdr_versym 	-- sh_type == SHT_GNU_versym
+local shdr_verdef	-- sh_type == SHT_GNU_verdef
+local shdr_verneed	-- sh_type == SHT_GNU_verneed
 do
 	print()
 	print'Sections:'
@@ -415,7 +415,7 @@ do
 
 		io.write('#', tostring(tonumber(elf.elf_ndxscn(scn))))
 		for _,field in ipairs{'sh_flags', 'sh_addr', 'sh_offset', 'sh_size', 'sh_link', 'sh_info', 'sh_addralign', 'sh_entsize'} do
-			io.write(' ', field, '=', inttohex(shdr[0][field]))
+			io.write(' ', field, '=', inttohex(shdr[field]))
 		end
 		io.write(' sh_type='..inttohex(shdr.sh_type)..'/'..(nameForSHType[tonumber(shdr.sh_type)] or 'unknown'))
 		io.write(' name="'..name..'"')
@@ -447,9 +447,6 @@ do
 		then
 			assert(not shdr_symtab)
 			shdr_symtab = shdr
-			symtab = ffi.cast('Elf64_Sym*', elfdataptr + shdr_symtab.sh_offset)
-			symtab_size = shdr_symtab.sh_size
-			symtab_count = shdr_symtab.sh_size / shdr.sh_entsize
 		end
 		
 		-- .strtab
@@ -545,7 +542,10 @@ do
 	print()
 
 -- this is crashing after #4, so why does it say there are 2000 or so entries?
-	if shdr_strtab and symtab then
+	if shdr_strtab and shdr_symtab then
+		local symtab = ffi.cast('Elf64_Sym*', elfdataptr + shdr_symtab.sh_offset)
+		local symtab_size = shdr_symtab.sh_size
+		local symtab_count = shdr_symtab.sh_size / shdr_symtab.sh_entsize
 		print()
 		print'Static Symbols:'
 		local symbol_names = elfdataptr + shdrs[shdr_symtab.sh_link].sh_offset
@@ -609,3 +609,5 @@ for i=0,phdrnum-1 do
 end
 
 elf.elf_end(e)
+
+print'DONE'
