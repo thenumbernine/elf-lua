@@ -386,7 +386,7 @@ print((
 
 local id = elfassertne(elf.elf_getident(e, ffi.null), ffi.null, 'elf_getident')
 
-print('   e_ident[0..'..elf.EI_ABIVERSION..']', string.hexdump(ffi.string(id, 8)))
+print('e_ident[0..'..elf.EI_ABIVERSION..']', string.hexdump(ffi.string(id, 8)))
 
 print()
 print'Elf header'
@@ -410,12 +410,14 @@ elfasserteq(elf.elf_getphdrnum(e, n), 0, 'elf_getphdrnum')
 local phdrnum = tonumber(n[0])
 print(' (phnum) '..inttohex(n[0]))
 
-print('shstrtab loc', ehdr[0].e_shoff + ehdr[0].e_shentsize * ehdr[0].e_shstrndx)
-local shdr_shstrtab = ffi.cast('Elf64_Shdr*', elfdataptr + (ehdr[0].e_shoff + ehdr[0].e_shentsize * ehdr[0].e_shstrndx))
+--print('shstrtab loc', ehdr[0].e_shoff + ehdr[0].e_shentsize * ehdr[0].e_shstrndx)
+--local shdr_shstrtab = ffi.cast('Elf64_Shdr*', elfdataptr + (ehdr[0].e_shoff + ehdr[0].e_shentsize * ehdr[0].e_shstrndx))
+-- now from shdr_shstrtab there are `e_shnum` headers ... I think that's the next section with `elf_nextscn`...
 
 do
 	local scn = ffi.null
 	local shdr = ffi.new'GElf_Shdr[1]'
+	local shdr_dynstr 
 	while true do
 		scn = elf.elf_nextscn(e, scn)
 		if scn == ffi.null then break end
@@ -430,6 +432,12 @@ do
 		io.write(' name="'..ffi.string(name)..'"')
 		print()
 
+		if shdr[0].sh_type == elf.SHT_STRTAB then
+			-- ... then this header is shdr_dynstr, holds the strings of SHT_DYNAMIC
+			-- will this always go before SHT_DYNAMIC ?
+			shdr_dynstr = ffi.new('GElf_Shdr', shdr[0])	-- is scn allocated?  will this pointer go bad? will its members?
+		end
+
 		if shdr[0].sh_type == elf.SHT_DYNAMIC then
 			local data = elfassertne(elf.elf_getdata(scn, ffi.null), ffi.null, 'elf_getdata')
 
@@ -443,18 +451,13 @@ do
 				io.write' '
 				writeField(dyn[0].d_un, 'd_ptr')        -- Elf64_Xword, or d_ptr Elf64_Addr
 				io.write(' d_tag='..inttohex(dyn[0].d_tag)..'/'..(nameForDType[tonumber(dyn[0].d_tag)] or 'unknown'))
-				if dyn[0].d_tag == elf.DT_NEEDED then
-					--[[
-					local p = elfdataptr + 
-							
-							if(fseek(f, shdr_dynstr.sh_offset + dyn.d_un.d_val, SEEK_SET) == 0) {
-                                sname[sizeof(sname) - 1] = 0;
-                                fgets(sname, sizeof(sname) - 1, f);
-                                printf("shdr.sh_type is SHT_DYNAMIC, dyn.d_tag is DT_NEEDED: %s\n", sname);
-                            }				
-					--]]
-				end
 				print()
+				
+				if dyn[0].d_tag == elf.DT_NEEDED then
+					assert(shdr_dynstr, "read SHT_DYNAMIC without SHT_STRTAB") 
+					local p = elfdataptr + shdr_dynstr.sh_offset + dyn[0].d_un.d_val
+					print("   DT_NEEDED: ", ffi.string(p));
+				end
 			end
 		end
 	end
