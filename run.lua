@@ -3,6 +3,8 @@
 -- https://github.com/Zard-C/libelf_examples/blob/main/src/getting_started.c
 -- https://github.com/Zard-C/libelf_examples/blob/main/src/print_elf_header.c
 -- https://github.com/Zard-C/libelf_examples/blob/main/src/read_header_table.c
+-- https://atakua.org/old-wp/wp-content/uploads/2015/03/libelf-by-example-20100112.pdf
+
 local ffi = require 'ffi'
 local assert = require 'ext.assert'
 local path = require 'ext.path'
@@ -10,17 +12,66 @@ local elf = require 'ffi.req' 'elf'
 local tolua = require 'ext.tolua'
 require 'ffi.req' 'c.fcntl'
 
+local nameForPType = {
+	[elf.PT_NULL] = 'PT_NULL',
+	[elf.PT_LOAD] = 'PT_LOAD',
+	[elf.PT_DYNAMIC] = 'PT_DYNAMIC',
+	[elf.PT_INTERP] = 'PT_INTERP',
+	[elf.PT_NOTE] = 'PT_NOTE',
+	[elf.PT_SHLIB] = 'PT_SHLIB',
+	[elf.PT_PHDR] = 'PT_PHDR',
+	[elf.PT_TLS] = 'PT_TLS',
+	[elf.PT_NUM] = 'PT_NUM',
+	[elf.PT_LOOS] = 'PT_LOOS',
+	[elf.PT_GNU_EH_FRAME] = 'PT_GNU_EH_FRAME',
+	[elf.PT_GNU_STACK] = 'PT_GNU_STACK',
+	[elf.PT_GNU_RELRO] = 'PT_GNU_RELRO',
+	[elf.PT_GNU_PROPERTY] = 'PT_GNU_PROPERTY',
+	[elf.PT_GNU_SFRAME] = 'PT_GNU_SFRAME',
+	[elf.PT_LOSUNW] = 'PT_LOSUNW',
+	[elf.PT_SUNWBSS] = 'PT_SUNWBSS',
+	[elf.PT_SUNWSTACK] = 'PT_SUNWSTACK',
+	[elf.PT_HISUNW] = 'PT_HISUNW',
+	[elf.PT_HIOS] = 'PT_HIOS',
+	[elf.PT_LOPROC] = 'PT_LOPROC',
+	[elf.PT_HIPROC] = 'PT_HIPROC',
+	[elf.PT_MIPS_REGINFO] = 'PT_MIPS_REGINFO',
+	[elf.PT_MIPS_RTPROC] = 'PT_MIPS_RTPROC',
+	[elf.PT_MIPS_OPTIONS] = 'PT_MIPS_OPTIONS',
+	[elf.PT_MIPS_ABIFLAGS] = 'PT_MIPS_ABIFLAGS',
+	[elf.PT_HP_TLS] = 'PT_HP_TLS',
+	[elf.PT_HP_CORE_NONE] = 'PT_HP_CORE_NONE',
+	[elf.PT_HP_CORE_VERSION] = 'PT_HP_CORE_VERSION',
+	[elf.PT_HP_CORE_KERNEL] = 'PT_HP_CORE_KERNEL',
+	[elf.PT_HP_CORE_COMM] = 'PT_HP_CORE_COMM',
+	[elf.PT_HP_CORE_PROC] = 'PT_HP_CORE_PROC',
+	[elf.PT_HP_CORE_LOADABLE] = 'PT_HP_CORE_LOADABLE',
+	[elf.PT_HP_CORE_STACK] = 'PT_HP_CORE_STACK',
+	[elf.PT_HP_CORE_SHM] = 'PT_HP_CORE_SHM',
+	[elf.PT_HP_CORE_MMF] = 'PT_HP_CORE_MMF',
+	[elf.PT_HP_PARALLEL] = 'PT_HP_PARALLEL',
+	[elf.PT_HP_FASTBIND] = 'PT_HP_FASTBIND',
+	[elf.PT_HP_OPT_ANNOT] = 'PT_HP_OPT_ANNOT',
+	[elf.PT_HP_HSL_ANNOT] = 'PT_HP_HSL_ANNOT',
+	[elf.PT_HP_STACK] = 'PT_HP_STACK',
+	[elf.PT_PARISC_ARCHEXT] = 'PT_PARISC_ARCHEXT',
+	[elf.PT_PARISC_UNWIND] = 'PT_PARISC_UNWIND',
+	[elf.PT_ARM_EXIDX] = 'PT_ARM_EXIDX',
+	[elf.PT_AARCH64_MEMTAG_MTE] = 'PT_AARCH64_MEMTAG_MTE',
+	[elf.PT_IA_64_ARCHEXT] = 'PT_IA_64_ARCHEXT',
+	[elf.PT_IA_64_UNWIND] = 'PT_IA_64_UNWIND',
+	[elf.PT_IA_64_HP_OPT_ANOT] = 'PT_IA_64_HP_OPT_ANOT',
+	[elf.PT_IA_64_HP_HSL_ANOT] = 'PT_IA_64_HP_HSL_ANOT',
+	[elf.PT_IA_64_HP_STACK] = 'PT_IA_64_HP_STACK',
+	[elf.PT_RISCV_ATTRIBUTES] = 'PT_RISCV_ATTRIBUTES',
+}
+
 local filename = assert((...), "expected filename")
 
 print('elf version', elf.elf_version(elf.EV_CURRENT))
 
 local elfdatastr = assert(path(filename):read())	-- as str
 local elfdataptr = ffi.cast('uint8_t*', elfdatastr)
-
---local fd = assert.ge(ffi.C.open(filename, ffi.C.O_RDONLY, 0), 0, "open("..filename..")")
---print('fd', fd)
---local e = assert.ne(elf.elf_begin(fd, elf.ELF_C_READ, ffi.null), ffi.null, "elf_begin")
---print('e', e)
 
 local e = assert.ne(elf.elf_memory(elfdataptr, #elfdatastr), ffi.null, 'elf_memory')
 
@@ -72,8 +123,12 @@ local function inttohex(x)
 	return tostring(ffi.cast('void*', x)):match'^cdata<void %*>: (.*)'
 end
 
-local function printField(ptr, field)
-	print('', field, inttohex(ptr[field]))	-- cast to ptr for quick hex intptr_t formatting
+local function writeField(ptr, field)
+	io.write('\t', field, '\t', inttohex(ptr[field]))	-- cast to ptr for quick hex intptr_t formatting
+end
+local function printField(...)
+	writeField(...)
+	print()
 end
 
 print()
@@ -91,9 +146,36 @@ local shdrnum = n[0]
 print(' (shnum) '..inttohex(n[0]))
 
 elfasserteq(elf.elf_getshdrstrndx(e, n), 0, 'elf_getshdrstrndx')
-local shdrstrndx = n[0]
 print(' (shstrndx) '..inttohex(n[0]))
+local shstrndx = n[0]
 
+do
+	local scn = ffi.null
+	local shdr = ffi.new'GElf_Shdr[1]'
+	while true do
+		scn = elf.elf_nextscn(e, scn)
+		if scn == ffi.null then break end
+		elfasserteq(elf.gelf_getshdr(scn, shdr), shdr, 'elf_getshdr')
+		local name = elfassertne(elf.elf_strptr(e, shstrndx, shdr[0].sh_name), ffi.null, 'elf_strptr')
+		print('', 'section', elf.elf_ndxscn(scn), ffi.string(name))
+	end
+
+	-- last section?
+	local scn = elfassertne(elf.elf_getscn(e, shstrndx), ffi.null, 'elf_getscn')
+	elfasserteq(elf.gelf_getshdr(scn, shdr), shdr, 'gelf_getshdr')
+	print('', 'shstrab size', inttohex(shdr[0].sh_size))
+
+	local data
+	local n = 0
+	while n < shdr[0].sh_size do
+		local data = elf.elf_getdata(scn, data)
+		if data == ffi.null then break end
+		local p = ffi.cast('char*', data[0].d_buf)
+		local pend = p + data[0].d_size
+		print('', 'shstrab data', ffi.string(p, data[0].d_size))
+		n = n + data[0].d_size
+	end
+end
 elfasserteq(elf.elf_getphdrnum(e, n), 0, 'elf_getphdrnum')
 local phdrnum = tonumber(n[0])
 print(' (phnum) '..inttohex(n[0]))
@@ -102,20 +184,9 @@ for i=0,phdrnum-1 do
 	local phdr = ffi.new'GElf_Phdr[1]'
 	elfasserteq(elf.gelf_getphdr(e, i, phdr), phdr, 'gelf_getphdr')
 
-	print('Program Header['..i..']:');
+	print('PHDR', i);
 
-	print('', 'p_type', inttohex(phdr[0].p_type), ({
-		[elf.PT_NULL] = 'PT_NULL',
-		[elf.PT_LOAD] = 'PT_LOAD',
-		[elf.PT_DYNAMIC] = 'PT_DYNAMIC',
-		[elf.PT_INTERP] = 'PT_INTERP',
-		[elf.PT_NOTE] = 'PT_NOTE',
-		[elf.PT_SHLIB] = 'PT_SHLIB',
-		[elf.PT_PHDR] = 'PT_PHDR',
-		[elf.PT_TLS] = 'PT_TLS',
-		[elf.PT_SUNWBSS] = 'PT_SUNWBSS',
-		[elf.PT_SUNWSTACK] = 'PT_SUNWSTACK',
-	})[phdr[0].p_type] or 'unknown')
+	print('', 'p_type', inttohex(phdr[0].p_type), nameForPType[phdr[0].p_type] or 'unknown')
 
 	printField(phdr[0], 'p_offset')
 	printField(phdr[0], 'p_vaddr')
@@ -131,11 +202,21 @@ for i=0,phdrnum-1 do
 	printField(phdr[0], 'p_align')
 
 	if phdr[0].p_type == elf.PT_DYNAMIC then
-		-- read dynamcis from phdr[0].p_offset
-		-- local dyndata = ffi.cast('Elf_Data*', 
-		-- wait how do we?  hwo do we seek with elf_begin/elf_end ?
+		print('\t\t', 'dynamic:')
+		local dyndata = ffi.cast('Elf_Data*', elfdataptr + phdr[0].p_offset)
+		local dyn = ffi.new'GElf_Dyn[1]'
+		local j = 0
+		repeat
+			elf.gelf_getdyn(dyndata, j, dyn)
+			io.write('\t\t', 'dyn #'..j, '\t')
+			writeField(dyn[0], 'd_tag')	-- Elf64_Sxword
+			-- then union of d_val or d_ptr
+			io.write'\t'
+			writeField(dyn[0].d_un, 'd_val')	-- Elf64_Xword, or d_ptr Elf64_Addr
+			print()
+			j=j+1
+		until true
 	end
 end
 
 elf.elf_end(e)
---ffi.C.close(fd)
