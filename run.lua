@@ -393,10 +393,12 @@ elfasserteq(elf.elf_getphdrnum(e, n), 0, 'elf_getphdrnum')
 local phdrnum = tonumber(n[0])
 print(' (phnum) '..inttohex(n[0]))
 
+-- all sections headers:
+local sections = ffi.cast('Elf64_Shdr*', elfdataptr + ehdr[0].e_shoff)
 
 local shdr_dynstr				 	-- sh_type == SHT_STRTAB and name == .dynstr
 local dynsym, dynsym_size -- sh_type == SHT_DYNSYM and name == .dynsym
-local shdr_symtab, symtab, symtab_size	-- sh_type == SHT_SYMTAB and name == .symtab
+local shdr_symtab, symtab, symtab_size, symtab_count	-- sh_type == SHT_SYMTAB and name == .symtab
 local shdr_strtab				-- sh_type == SHT_STRTAB and name == .strtab
 do
 	print()
@@ -444,6 +446,9 @@ do
 			shdr_symtab = ffi.new('GElf_Shdr', shdr[0])
 			symtab = ffi.cast('Elf64_Sym*', elfdataptr + shdr_symtab.sh_offset)
 			symtab_size = shdr_symtab.sh_size
+			-- everyone except practice says this is correct:
+			--symtab_count = shdr_symtab.sh_size / ffi.sizeof'Elf64_Sym'
+			symtab_count = shdr_symtab.sh_size / shdr[0].sh_entsize
 		end
 		
 		-- .strtab
@@ -530,23 +535,20 @@ do
 	if shdr_strtab and symtab then
 		print()
 		print'Static Symbols:'
-		local strtab = elfdataptr + shdr_strtab.sh_offset
+		-- seek to shdr_symtab.sh_offset
+		--local strtab = elfdataptr + shdr_strtab.sh_offset
 -- why is my size outrageous? keeps crashing on 4, i think the size is bad...
 		--local numStaticSymbols = tonumber(symtab_size/ffi.sizeof'Elf64_Sym')
-		-- https://stackoverflow.com/a/75824475
-print('shdr_symtab.sh_link', shdr_symtab.sh_link)	
-print("ffi.sizeof'Elf64_Sym'", ffi.sizeof'Elf64_Sym')
-		local numStaticSymbols = 4--shdr_symtab.sh_link/ffi.sizeof'Elf64_Sym'
-print('size', symtab_size)
-print('count', numStaticSymbols)
-		for i=0,numStaticSymbols-1 do
+		--local numStaticSymbols = 4--shdr_symtab.sh_link/ffi.sizeof'Elf64_Sym'
+		local symbol_names = elfdataptr + sections[shdr_symtab.sh_link].sh_offset
+		for i=0,tonumber(symtab_count)-1 do
 			local p = symtab[i]
 			io.write('#'..i..' ')
 			for _,field in ipairs{'st_name', 'st_info', 'st_other', 'st_shndx', 'st_value', 'st_size'} do
 				io.write' '
 				writeField(p, field)
 			end
-			io.write(' '..ffi.string(strtab + p.st_value))
+			io.write(' '..ffi.string(symbol_names + p.st_name))
 			print()
 		end
 	end
