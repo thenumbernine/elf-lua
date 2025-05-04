@@ -541,7 +541,6 @@ do
 	end
 	print()
 
--- this is crashing after #4, so why does it say there are 2000 or so entries?
 	if shdr_strtab and shdr_symtab then
 		local symtab = ffi.cast('Elf64_Sym*', elfdataptr + shdr_symtab.sh_offset)
 		local symtab_size = shdr_symtab.sh_size
