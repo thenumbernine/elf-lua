@@ -394,7 +394,7 @@ local phdrnum = tonumber(n[0])
 print(' (phnum) '..inttohex(n[0]))
 
 -- all sections headers:
-local sections = ffi.cast('Elf64_Shdr*', elfdataptr + ehdr[0].e_shoff)
+local shdrs = ffi.cast('Elf64_Shdr*', elfdataptr + ehdr[0].e_shoff)
 
 local shdr_dynstr				 	-- sh_type == SHT_STRTAB and name == .dynstr
 local dynsym, dynsym_size -- sh_type == SHT_DYNSYM and name == .dynsym
@@ -403,12 +403,12 @@ local shdr_strtab				-- sh_type == SHT_STRTAB and name == .strtab
 do
 	print()
 	print'Sections:'
-	local scn = ffi.null
-	local shdr = ffi.new'GElf_Shdr[1]'
-	while true do
-		scn = elf.elf_nextscn(e, scn)
-		if scn == ffi.null then break end
-		elfasserteq(elf.gelf_getshdr(scn, shdr), shdr, 'elf_getshdr')
+	--local shdr = ffi.new'GElf_Shdr[1]'
+	for i=1,tonumber(shstrndx)-1 do		-- is section #0 always empty?
+		local scn = elfassertne(elf.elf_getscn(e, i), ffi.null, 'elf_getscn')
+		--elfasserteq(elf.gelf_getshdr(scn, shdr), shdr, 'elf_getshdr')
+		local shdr = shdrs + i
+
 		local nameptr = elfassertne(elf.elf_strptr(e, shstrndx, shdr[0].sh_name), ffi.null, 'elf_strptr')
 		local name = ffi.string(nameptr)
 
@@ -446,8 +446,6 @@ do
 			shdr_symtab = ffi.new('GElf_Shdr', shdr[0])
 			symtab = ffi.cast('Elf64_Sym*', elfdataptr + shdr_symtab.sh_offset)
 			symtab_size = shdr_symtab.sh_size
-			-- everyone except practice says this is correct:
-			--symtab_count = shdr_symtab.sh_size / ffi.sizeof'Elf64_Sym'
 			symtab_count = shdr_symtab.sh_size / shdr[0].sh_entsize
 		end
 		
@@ -502,7 +500,7 @@ do
 
 	-- last section?
 	local scn = elfassertne(elf.elf_getscn(e, shstrndx), ffi.null, 'elf_getscn')
-	elfasserteq(elf.gelf_getshdr(scn, shdr), shdr, 'gelf_getshdr')
+	local shdr = shdrs + shstrndx
 	print('shstrab size', inttohex(shdr[0].sh_size))
 	local data
 	local n = 0
@@ -535,12 +533,7 @@ do
 	if shdr_strtab and symtab then
 		print()
 		print'Static Symbols:'
-		-- seek to shdr_symtab.sh_offset
-		--local strtab = elfdataptr + shdr_strtab.sh_offset
--- why is my size outrageous? keeps crashing on 4, i think the size is bad...
-		--local numStaticSymbols = tonumber(symtab_size/ffi.sizeof'Elf64_Sym')
-		--local numStaticSymbols = 4--shdr_symtab.sh_link/ffi.sizeof'Elf64_Sym'
-		local symbol_names = elfdataptr + sections[shdr_symtab.sh_link].sh_offset
+		local symbol_names = elfdataptr + shdrs[shdr_symtab.sh_link].sh_offset
 		for i=0,tonumber(symtab_count)-1 do
 			local p = symtab[i]
 			io.write('#'..i..' ')
