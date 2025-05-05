@@ -398,7 +398,7 @@ local shdr_dynamic 	-- sh_type == SHT_DYNAMIC
 local shdr_dynstr	-- sh_type == SHT_STRTAB and name == .dynstr
 local shdr_dynsym 	-- sh_type == SHT_DYNSYM and name == .dynsym
 local shdr_symtab	-- sh_type == SHT_SYMTAB and name == .symtab
---local shdr_strtab	-- sh_type == SHT_STRTAB and name == .strtab
+--local shdr_strtab	-- sh_type == SHT_STRTAB and name == .strtab ... not needed since shdr_symtab provides the shdr of its strings in its .sh_link
 local shdr_versym 	-- sh_type == SHT_GNU_versym
 local shdr_verdef	-- sh_type == SHT_GNU_verdef
 local shdr_verneed	-- sh_type == SHT_GNU_verneed
@@ -470,10 +470,16 @@ for i=1,ehdr.e_shstrndx-1 do		-- is section #0 always empty?
 	end
 end
 
+local dyn_verneed
+local dyn_verneednum
+local dyn_versym
 if shdr_dynamic then
 	-- matches PT_DYNAMIC, but why is it a wholly dif section SHT_DYNAMIC?
 	local dyns = ffi.cast('GElf_Dyn*', elfdataptr + shdr_dynamic.sh_offset)
 	local count = tonumber(shdr_dynamic.sh_size/shdr_dynamic.sh_entsize)
+	-- same in static and dynamic names as here?
+	local shdr_strs = shdrs + shdr_dynamic.sh_link
+	local strs = elfdataptr + shdr_strs.sh_offset
 	print()
 	print'SHT_DYNAMIC:'
 	for i=0,count-1 do
@@ -481,22 +487,36 @@ if shdr_dynamic then
 
 		io.write(' dyn #'..i..' @'..inttohex(ffi.cast('uint8_t*', dyn) - elfdataptr))
 		io.write' '
-		writeField(dyn.d_un, 'd_ptr')
+		writeField(dyn.d_un, 'd_val')
 		io.write(' d_tag='..inttohex(dyn.d_tag)..'/'..(nameForDType[tonumber(dyn.d_tag)] or 'unknown'))
 
 		if dyn.d_tag == elf.DT_NEEDED then
-			assert(shdr_dynstr, "read SHT_DYNAMIC without SHT_STRTAB")
-			io.write(' ', ffi.string(elfdataptr + shdr_dynstr.sh_offset + dyn.d_un.d_val));
+			io.write(' ', ffi.string(strs + dyn.d_un.d_val))
 		elseif dyn.d_tag == elf.DT_VERNEED then
-			-- dyn.d_ptr == shdr[SHT_GNU_verneed / .gnu.version_r]'s sh_addr & sh_offset
+			-- dyn.d_val == shdr[SHT_GNU_verneed / .gnu.version_r]'s sh_addr & sh_offset
+			dyn_verneed = dyn
 		elseif dyn.d_tag == elf.DT_VERNEEDNUM then
 			-- only 3 in my example
+			dyn_verneednum = dyn
 		elseif dyn.d_tag == elf.DT_VERSYM then
-			-- dyn.d_ptr == shdr[SHT_GNU_versym / .gnu.version]'s sh_addr & sh_offset
+			-- dyn.d_val == shdr[SHT_GNU_versym / .gnu.version]'s sh_addr & sh_offset
+			dyn_versym = dyn
 		end
 		
 		print()
 	end	
+end
+
+if dyn_verneed and shdr_verneed then
+	assert.eq(dyn_verneed.d_un.d_val, shdr_verneed.sh_offset, 'dyn verneed.d_un.d_val vs shdr verneed.sh_offset')
+end
+
+-- is this true or just coincidence?  "sh_info" is a funny name for a field length...
+if dyn_verneednum and shdr_verneed then
+	assert.eq(dyn_verneednum.d_un.d_val, shdr_verneed.sh_info, 'dyn verneednum.d_un.d_val vs shdr verneed.sh_info')
+end
+if dyn_versym and shdr_versym then
+	assert.eq(dyn_versym.d_un.d_val, shdr_versym.sh_offset, 'dyn versym.d_un.d_val vs shdr versym.sh_offset')
 end
 
 --[=[ very last section - holds the null-term section names above ... print it?  or nah cuz it's already in the section names
@@ -556,12 +576,14 @@ end
 -- https://compilepeace.github.io/BINARY_DISSECTION_COURSE/ELF/SYMBOLS/SYMBOLS.html
 -- SHT_DYNSYM/.dynsym + SHT_STRTAB/.dynstr
 if shdr_dynsym 		-- = list of symbols
-and shdr_dynstr 	-- = where to find their name strings
+--and shdr_dynstr 	-- = where to find their name strings, or use shdr_dynsym.sh_link
 then
 	local dynsym = ffi.cast('GElf_Sym*', elfdataptr + shdr_dynsym.sh_offset)
 	local dynsym_size = shdr_dynsym.sh_size
 	local count = tonumber(dynsym_size/ffi.sizeof'GElf_Sym')
-	local dynstr = elfdataptr + shdr_dynstr.sh_offset
+	-- this is true in static header.  is it true here too?  yup.  coincidence?
+	local shdr_strs = shdrs + shdr_dynsym.sh_link
+	local strs = elfdataptr + shdr_strs.sh_offset
 	print()
 	print'SHT_DYNSYM/.dynsym:'
 	for i=0,count-1 do
@@ -571,7 +593,7 @@ then
 			io.write' '
 			writeField(p, field)
 		end
-		io.write(' '..ffi.string(dynstr + p.st_name))
+		io.write(' '..ffi.string(strs + p.st_name))
 		print()
 
 		if shdr_versym then
@@ -610,10 +632,10 @@ if shdr_symtab then	-- = list of symbols
 	local symtab = ffi.cast('GElf_Sym*', elfdataptr + shdr_symtab.sh_offset)
 	local symtab_size = shdr_symtab.sh_size
 	local symtab_count = shdr_symtab.sh_size / shdr_symtab.sh_entsize
+	local shdr_strs = shdrs + shdr_symtab.sh_link
+	local strs = elfdataptr + shdr_strs.sh_offset
 	print()
 	print'SHT_SYMTAB/.symtab:'
-	local shdr_strtab = shdrs + shdr_symtab.sh_link
-	local strtab = elfdataptr + shdr_strtab.sh_offset
 	for i=0,tonumber(symtab_count)-1 do
 		local p = symtab[i]
 		io.write(' #'..i..' ')
@@ -621,8 +643,8 @@ if shdr_symtab then	-- = list of symbols
 			io.write' '
 			writeField(p, field)
 		end
-		-- should be within shdr_strtab.sh_size of shdr_strtab.offset right?
-		io.write(' '..ffi.string(strtab + p.st_name))
+		-- should be within shdr_strs.sh_size of shdr_strs.offset right?
+		io.write(' '..ffi.string(strs + p.st_name))
 		print()
 	end
 end
