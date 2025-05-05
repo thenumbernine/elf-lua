@@ -7,6 +7,7 @@
 
 local ffi = require 'ffi'
 local assert = require 'ext.assert'
+local table = require 'ext.table'
 local path = require 'ext.path'
 local string = require 'ext.string'
 local elf = require 'ffi.req' 'elf'
@@ -372,7 +373,8 @@ local function writeField(ptr, field)
 end
 
 
-local filename = assert((...), "expected filename")
+local filename, outfn = ...
+assert(filename, "expected filename")
 
 print('elf lib version', elf.elf_version(elf.EV_CURRENT))	-- does EV_CURRENT go here?
 
@@ -544,6 +546,76 @@ while n < shdr.sh_size do
 end
 --]=]
 
+local nameForVersym = {}	-- versym # matches up to vernaux.vna_other
+if shdr_verneed then
+	local count = shdr_verneed.sh_info
+	local shdr_strs = shdrs + shdr_verneed.sh_link
+	local strs = elfdataptr + shdr_strs.sh_offset
+	print()
+	print'SHT_GNU_verneed:'
+	--local verneeds = ffi.cast('GElf_Verneed*', elfdataptr + shdr_verneed.sh_offset)
+	--local verneed = verneeds + i
+	local p = elfdataptr + shdr_verneed.sh_offset
+	for i=0,count-1 do
+		--local verneed = verneeds + i
+		local verneed = ffi.cast('GElf_Verneed*', p)
+		io.write(' #'..i)
+		for _,field in ipairs{
+			'vn_version', 	-- always 1?
+			--'vn_cnt', 'vn_aux', 'vn_next'	-- redundant?
+		} do
+			io.write' '
+			writeField(verneed, field)
+		end
+		io.write' '
+		writeField(verneed, 'vn_file')
+		local verneedName = ffi.string(strs + verneed.vn_file)
+		io.write(' '..verneedName)
+		print()
+
+		-- load the vernaux of the ver
+		local p2 = p + verneed.vn_aux
+		local prevVernaux
+		for j=0,verneed.vn_cnt-1 do
+			local vernaux = ffi.cast('GElf_Vernaux*', p2)
+			io.write('  #'..j)
+			for _,field in ipairs{'vna_hash', 'vna_flags', 'vna_other',
+				-- 'vna_name', 'vna_next'	-- redundant
+			} do
+				io.write' '
+				writeField(vernaux, field)
+			end
+			local vernauxName = ffi.string(strs + vernaux.vna_name)
+			io.write(' '..vernauxName)
+			print()
+
+			assert(not nameForVersym[vernaux.vna_other], "found two entries for versym="..tostring(vernaux.vna_other))
+			nameForVersym[vernaux.vna_other] = verneedName..'/'..vernauxName
+
+			-- [[ TESTING: downgrade the libm/2.38 to 2.2.5
+			if vernauxName == 'GLIBC_2.38' then
+				print('!!! removing versym '..vernaux.vna_other)
+				-- for this special case of this binary, it is the first verneed link, so have verneed link to the next entry
+				-- it doesn't matter if the versym numbers aren't contiguous, right?
+				verneed.vn_cnt = verneed.vn_cnt - 1
+				if not prevVernaux then	-- first record
+					verneed.vn_aux = verneed.vn_aux + vernaux.vna_next
+				else					-- subseqeuent record
+					prevVernaux.vna_next = prevVernaux.vna_next + vernaux.vna_next
+				end
+			end
+			--]]
+
+			prevVernaux = vernaux
+			p2 = p2 + vernaux.vna_next
+		end
+
+		p = p + verneed.vn_next
+	end
+end
+
+local versymForName = table.mapi(nameForVersym, function(v,k) return k,v end):setmetatable(nil)
+
 -- https://compilepeace.github.io/BINARY_DISSECTION_COURSE/ELF/SYMBOLS/SYMBOLS.html
 -- SHT_DYNSYM/.dynsym + SHT_STRTAB/.dynstr
 if shdr_dynsym 		-- = list of symbols
@@ -584,7 +656,8 @@ then
 		-- 0x03 == 2 = 'F'
 		-- 0x03 == 1 = 'O'
 
-		io.write(' '..ffi.string(strs + p.st_name))
+		local symName = ffi.string(strs + p.st_name)
+		io.write(' '..symName)
 
 		local shndx = p.st_shndx
 		io.write' '
@@ -598,95 +671,30 @@ then
 			-- versym == 0 shows up as none
 			-- versym == 1 shows up as base
 			-- versym > 1 is dif names
+			local versymName
 			if versym == 0 then
 			elseif versym == 1 then
-				io.write(' versym=base')
+				io.write(' versym=Base')
 			else
-				io.write(' versym='..versym)
+				versymName = nameForVersym[versym]
+				io.write(' versym='..(versymName and versymName or '#'..versym))
 			end
-
-			--[[ TESTING: downgrade the 2.38 to 2.34
-			if versym == 9 then
-				--versyms[i] = 4	-- fmod not in 2.34
-				--versyms[i] = 6	-- fmod not in 2.29
-				--versyms[i] = 10	-- fmod not in 2.14
-				--versyms[i] = 7	-- fmod not in 2.7
-				versyms[i] = 2
+			-- do our hacking here:
+			-- [[ TESTING: downgrade the libm/2.38 to 2.2.5
+			if versymName == 'libm.so.6/GLIBC_2.38' then
+				-- TODO how to be certain which will have it?
+				--versym = assert.index(versymForName, 'libm.so.6/GLIBC_2.34')	-- fmod not in 2.34
+				--versym = assert.index(versymForName, 'libm.so.6/GLIBC_2.29')	-- fmod not in 2.29
+				--versym = assert.index(versymForName, 'libm.so.6/GLIBC_2.14')	-- fmod not in 2.14
+				--versym = assert.index(versymForName, 'libm.so.6/GLIBC_2.7')		-- fmod not in 2.7
+				local newversym = assert.index(versymForName, 'libm.so.6/GLIBC_2.2.5')		-- fmod in 2.2.5
+print('!!! changing '..symName..' verysm to '..newversym)
+				versym = newversym
+				versyms[i] = versym
 			end
 			--]]
 		end
-
-		--[[
-		the max versym is 10.  even if #0 and #1 are resreved, that's still a lot more than verneednum=3 ...
-		it corresponds to this info in ldd -v:
-		-- ldd output order:
-		#8	libgcc_s.so.1 (GCC_3.3) => /lib/x86_64-linux-gnu/libgcc_s.so.1
-		#5	libgcc_s.so.1 (GCC_3.0) => /lib/x86_64-linux-gnu/libgcc_s.so.1
-		#10	libc.so.6 (GLIBC_2.14) => /lib/x86_64-linux-gnu/libc.so.6
-		#7	libc.so.6 (GLIBC_2.7) => /lib/x86_64-linux-gnu/libc.so.6
-		#4	libc.so.6 (GLIBC_2.34) => /lib/x86_64-linux-gnu/libc.so.6
-		#3	libc.so.6 (GLIBC_2.2.5) => /lib/x86_64-linux-gnu/libc.so.6
-		#9	libm.so.6 (GLIBC_2.38) => /lib/x86_64-linux-gnu/libm.so.6
-		#6	libm.so.6 (GLIBC_2.29) => /lib/x86_64-linux-gnu/libm.so.6
-		#2	libm.so.6 (GLIBC_2.2.5) => /lib/x86_64-linux-gnu/libm.so.6
-
-		-- in version order:
-		#3	libc.so.6 (GLIBC_2.2.5) => /lib/x86_64-linux-gnu/libc.so.6
-		#2	libm.so.6 (GLIBC_2.2.5) => /lib/x86_64-linux-gnu/libm.so.6
-		#7	libc.so.6 (GLIBC_2.7) => /lib/x86_64-linux-gnu/libc.so.6
-		#10	libc.so.6 (GLIBC_2.14) => /lib/x86_64-linux-gnu/libc.so.6
-		#6	libm.so.6 (GLIBC_2.29) => /lib/x86_64-linux-gnu/libm.so.6
-		#4	libc.so.6 (GLIBC_2.34) => /lib/x86_64-linux-gnu/libc.so.6
-		#9	libm.so.6 (GLIBC_2.38) => /lib/x86_64-linux-gnu/libm.so.6
-		#5	libgcc_s.so.1 (GCC_3.0) => /lib/x86_64-linux-gnu/libgcc_s.so.1
-		#8	libgcc_s.so.1 (GCC_3.3) => /lib/x86_64-linux-gnu/libgcc_s.so.1
-		--]]
 		print()
-	end
-end
-
-if shdr_verneed then
-	local count = shdr_verneed.sh_info
-	local shdr_strs = shdrs + shdr_verneed.sh_link
-	local strs = elfdataptr + shdr_strs.sh_offset
-	print()
-	print'SHT_GNU_verneed:'
-	--local verneeds = ffi.cast('GElf_Verneed*', elfdataptr + shdr_verneed.sh_offset)
-	--local verneed = verneeds + i
-	local p = elfdataptr + shdr_verneed.sh_offset
-	for i=0,count-1 do
-		--local verneed = verneeds + i
-		local verneed = ffi.cast('GElf_Verneed*', p)
-		io.write(' #'..i)
-		for _,field in ipairs{
-			'vn_version', 	-- always 1?
-			--'vn_cnt', 'vn_aux', 'vn_next'	-- redundant?
-		} do
-			io.write' '
-			writeField(verneed, field)
-		end
-		io.write' '
-		writeField(verneed, 'vn_file')
-		io.write(' '..ffi.string(strs + verneed.vn_file))
-		print()
-
-		local p2 = p + verneed.vn_aux
-		for j=0,verneed.vn_cnt-1 do
-			local vernaux = ffi.cast('GElf_Vernaux*', p2)
-			io.write('  #'..j)
-			for _,field in ipairs{'vna_hash', 'vna_flags', 'vna_other',
-				-- 'vna_name', 'vna_next'	-- redundant
-			} do
-				io.write' '
-				writeField(vernaux, field)
-			end
-			io.write(' '..ffi.string(strs + vernaux.vna_name))
-			print()
-
-			p2 = p2 + vernaux.vna_next
-		end
-
-		p = p + verneed.vn_next
 	end
 end
 
@@ -707,8 +715,17 @@ if shdr_symtab then	-- = list of symbols
 			writeField(p, field)
 		end
 		-- should be within shdr_strs.sh_size of shdr_strs.offset right?
-		io.write(' '..ffi.string(strs + p.st_name))
+		local symNamePtr = strs + p.st_name
+		local symName = ffi.string(symNamePtr)
+		io.write(' '..symName)
 		print()
+
+		-- [[ TESTING: downgrade the libm/2.38 to 2.2.5
+		if symName == 'fmod@GLIBC_2.38' then
+print'!!! truncating name'
+			symNamePtr[4] = 0	-- welp i could change it to 2.2.5 but that string takes up more room so ...
+		end
+		--]]
 	end
 end
 
@@ -752,4 +769,6 @@ elf.elf_end(elfHandle)
 print()
 print'DONE'
 
-path'luajit-hacked':write(elfdatastr)
+if outfn then
+	path(outfn):write(elfdatastr)
+end
