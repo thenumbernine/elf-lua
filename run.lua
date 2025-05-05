@@ -594,7 +594,7 @@ if shdr_verneed then
 
 			-- [[ TESTING: downgrade the libm/2.38 to 2.2.5
 			if vernauxName == 'GLIBC_2.38' then
-				print('!!! removing versym '..vernaux.vna_other)
+--print('!!! removing versym '..vernaux.vna_other)
 				-- for this special case of this binary, it is the first verneed link, so have verneed link to the next entry
 				-- it doesn't matter if the versym numbers aren't contiguous, right?
 				verneed.vn_cnt = verneed.vn_cnt - 1
@@ -616,12 +616,19 @@ end
 
 local versymForName = table.mapi(nameForVersym, function(v,k) return k,v end):setmetatable(nil)
 
+local function getVersymName(versym)
+	if versym == 0 then return '' end
+	if versym == 1 then return 'Base' end
+	return nameForVersym[versym] or '#'..versym
+end
+
+
 -- https://compilepeace.github.io/BINARY_DISSECTION_COURSE/ELF/SYMBOLS/SYMBOLS.html
 -- SHT_DYNSYM/.dynsym + SHT_STRTAB/.dynstr
 if shdr_dynsym 		-- = list of symbols
 --and shdr_dynstr 	-- = where to find their name strings, or use shdr_dynsym.sh_link
 then
-	local dynsym = ffi.cast('GElf_Sym*', elfdataptr + shdr_dynsym.sh_offset)
+	local dynsyms = ffi.cast('GElf_Sym*', elfdataptr + shdr_dynsym.sh_offset)
 	local dynsym_size = shdr_dynsym.sh_size
 	local count = tonumber(dynsym_size/ffi.sizeof'GElf_Sym')
 
@@ -637,14 +644,16 @@ then
 	local shdr_strs = shdrs + shdr_dynsym.sh_link
 	local strs = elfdataptr + shdr_strs.sh_offset
 
+	local dynsymForName = {}
+
 	print()
 	print'SHT_DYNSYM/.dynsym:'
 	for i=0,count-1 do
-		local p = dynsym[i]
+		local sym = dynsyms[i]
 		io.write(' #'..i)
 		for _,field in ipairs{'st_name', 'st_info', 'st_other', 'st_value', 'st_size'} do
 			io.write' '
-			writeField(p, field)
+			writeField(sym, field)
 		end
 		-- in objdump -T:
 		-- st_shndx is flags:
@@ -656,46 +665,72 @@ then
 		-- 0x03 == 2 = 'F'
 		-- 0x03 == 1 = 'O'
 
-		local symName = ffi.string(strs + p.st_name)
+		local symName = ffi.string(strs + sym.st_name)
 		io.write(' '..symName)
 
-		local shndx = p.st_shndx
+		local shndx = sym.st_shndx
 		io.write' '
-		writeField(p, 'st_shndx')
+		writeField(sym, 'st_shndx')
 		if shndx > 0 then
 			io.write('/'..getSectionHeaderName(shndx))
 		end
+
+		if dynsymForName[symName] then error("two entries named "..symName) end
+		dynsymForName[symName] = {
+			sym = sym,
+			versymPtr = versyms + i,
+		}
 
 		if versyms then
 			local versym = versyms[i]
 			-- versym == 0 shows up as none
 			-- versym == 1 shows up as base
 			-- versym > 1 is dif names
-			local versymName
-			if versym == 0 then
-			elseif versym == 1 then
-				io.write(' versym=Base')
-			else
-				versymName = nameForVersym[versym]
-				io.write(' versym='..(versymName and versymName or '#'..versym))
-			end
-			-- do our hacking here:
-			-- [[ TESTING: downgrade the libm/2.38 to 2.2.5
-			if versymName == 'libm.so.6/GLIBC_2.38' then
+			io.write(' versym='..getVersymName(versym))
+		end
+		print()
+	end
+
+	-- do our hacking here:
+	-- [[ TESTING: downgrade the libm/2.38 to 2.2.5
+	local function swapVerSym(fromName, toName, names)
+		for _,name in ipairs(names) do
+			local info = assert.index(dynsymForName, name, 'dynsymForName')
+			local sym = info.sym
+			local versym = info.versymPtr[0]
+			local versymName = getVersymName(versym)
+			if versymName == fromName then
 				-- TODO how to be certain which will have it?
 				--versym = assert.index(versymForName, 'libm.so.6/GLIBC_2.34')	-- fmod not in 2.34
 				--versym = assert.index(versymForName, 'libm.so.6/GLIBC_2.29')	-- fmod not in 2.29
 				--versym = assert.index(versymForName, 'libm.so.6/GLIBC_2.14')	-- fmod not in 2.14
 				--versym = assert.index(versymForName, 'libm.so.6/GLIBC_2.7')		-- fmod not in 2.7
-				local newversym = assert.index(versymForName, 'libm.so.6/GLIBC_2.2.5')		-- fmod in 2.2.5
-print('!!! changing '..symName..' verysm to '..newversym)
-				versym = newversym
-				versyms[i] = versym
+				versym = assert.index(versymForName, toName)		-- fmod in 2.2.5
+	--print('!!! changing '..name..' verysm to '..newversym)
+				info.versymPtr[0] = versym
 			end
-			--]]
 		end
-		print()
 	end
+	swapVerSym('libm.so.6/GLIBC_2.38', 'libm.so.6/GLIBC_2.2.5', {
+		'fmod',	-- fmod is present in GLIBC_2.38 and GLIBC_2.2.5 but not between
+		'fmodf',
+	})
+	swapVerSym('libc.so.6/GLIBC_2.38', 'libc.so.6/GLIBC_2.34', {
+		'__isoc23_strtol',
+		'__isoc23_strtoll',
+		'__isoc23_strtoul',
+		'__isoc23_strtoull',
+		'__isoc23_vsscanf',
+		'wcslcpy',
+		'wcslcat',
+		'strlcpy',
+		'strlcat',
+	})
+	-- crazy ideas have come to an end - this isn't in any GLIBC's ...
+	swapVerSym('libc.so.6/GLIBC_2.38', 'libc.so.6/GLIBC_2.2.5', {
+		'__isoc23_sscanf',
+	})
+	--]]
 end
 
 -- SHT_STRTAB/.strtab + SHT_SYMTAB/.symtab
@@ -722,7 +757,7 @@ if shdr_symtab then	-- = list of symbols
 
 		-- [[ TESTING: downgrade the libm/2.38 to 2.2.5
 		if symName == 'fmod@GLIBC_2.38' then
-print'!!! truncating name'
+--print'!!! truncating name'
 			symNamePtr[4] = 0	-- welp i could change it to 2.2.5 but that string takes up more room so ...
 		end
 		--]]
