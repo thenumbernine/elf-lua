@@ -350,13 +350,25 @@ local function elfassertne(a, b, msg)
 	return a, b, msg
 end
 
-local function inttohex(x)
-	if ffi.cast('uintptr_t', x) == 0ULL then return '0x00000000' end	-- skip 'NULL'
+local function inttohex(x, numbytes)
+	--[[ easier to do when i use my struct lib ...
+	numbytes = numbytes or 8
+	local s = ''
+	for i=0,numbytes-1 do
+		s = ('%02x'):format(bit.band(x, 0xff)) .. s
+		x = bit.rshift(x, 2)
+	end
+	return '0x'..s
+	--]]
+	-- [[
+	if ffi.cast('uintptr_t', x) == 0ULL then return '0x00000000' end        -- skip 'NULL'
 	return tostring(ffi.cast('void*', x)):match'^cdata<void %*>: (.*)'
+	--]]
 end
 
 local function writeField(ptr, field)
-	io.write(field, '=', inttohex(ptr[field]))	-- cast to ptr for quick hex intptr_t formatting
+	local x = ptr[field]
+	io.write(field, '=', inttohex(x))
 end
 
 
@@ -398,26 +410,30 @@ local shdr_dynamic 	-- sh_type == SHT_DYNAMIC
 local shdr_dynstr	-- sh_type == SHT_STRTAB and name == .dynstr
 local shdr_dynsym 	-- sh_type == SHT_DYNSYM and name == .dynsym
 local shdr_symtab	-- sh_type == SHT_SYMTAB and name == .symtab
---local shdr_strtab	-- sh_type == SHT_STRTAB and name == .strtab ... not needed since shdr_symtab provides the shdr of its strings in its .sh_link
 local shdr_versym 	-- sh_type == SHT_GNU_versym
 local shdr_verdef	-- sh_type == SHT_GNU_verdef
 local shdr_verneed	-- sh_type == SHT_GNU_verneed
 
 local shdr_shstr = shdrs + ehdr.e_shstrndx
 local shstrs = ffi.cast('char*', elfdataptr + shdr_shstr.sh_offset)
+local function getSectionHeaderName(i)
+	return ffi.string(shstrs + shdrs[i].sh_name)
+end
 
 print()
 print'Sections:'
 for i=1,ehdr.e_shstrndx-1 do		-- is section #0 always empty?
 	local shdr = shdrs + i
-	local name = ffi.string(shstrs + shdr.sh_name)
-
+	local name = getSectionHeaderName(i)
 	io.write(' #'..i..' shdr=@'..inttohex(ffi.cast('uint8_t*', shdr) - elfdataptr))
-	for _,field in ipairs{'sh_flags', 'sh_addr', 'sh_offset', 'sh_size', 'sh_link', 'sh_info', 'sh_addralign', 'sh_entsize'} do
-		io.write(' ', field, '=', inttohex(shdr[field]))
+	for _,field in ipairs{'sh_flags', 'sh_addr', 'sh_offset', 'sh_size', 'sh_link', 'sh_info', 'sh_addralign', 'sh_entsize',
+		'sh_type', 'sh_name'	-- redundant ... if i print sh_type next to unknowns
+	} do
+		io.write' '
+		writeField(shdr, field)
 	end
-	io.write(' sh_type='..inttohex(shdr.sh_type)..'/'..(nameForSHType[tonumber(shdr.sh_type)] or 'unknown'))
-	io.write(' name="'..name..'"')
+	io.write(' '..name)
+	io.write(' / '..(nameForSHType[tonumber(shdr.sh_type)] or 'unknown'))
 	print()
 
 	if shdr.sh_type == elf.SHT_STRTAB and name == '.dynstr' then
@@ -438,13 +454,6 @@ for i=1,ehdr.e_shstrndx-1 do		-- is section #0 always empty?
 		assert(not shdr_symtab)
 		shdr_symtab = shdr
 	end
-
-	--[[ .strtab
-	if shdr.sh_type == elf.SHT_STRTAB and name == '.strtab' then
-		assert(not shdr_strtab)
-		shdr_strtab = shdr
-	end
-	--]]
 
 	-- https://refspecs.linuxfoundation.org/LSB_3.1.1/LSB-Core-generic/LSB-Core-generic/symversion.html
 	-- "The special section .gnu.version which has a section type of SHT_GNU_versym shall contain the Symbol Version Table.
@@ -478,6 +487,7 @@ if shdr_dynamic then
 	local dyns = ffi.cast('GElf_Dyn*', elfdataptr + shdr_dynamic.sh_offset)
 	local count = tonumber(shdr_dynamic.sh_size/shdr_dynamic.sh_entsize)
 	-- same in static and dynamic names as here?
+	-- if it is a coincidence and ever fails, go back to using shdr_dynstr
 	local shdr_strs = shdrs + shdr_dynamic.sh_link
 	local strs = elfdataptr + shdr_strs.sh_offset
 	print()
@@ -502,9 +512,9 @@ if shdr_dynamic then
 			-- dyn.d_val == shdr[SHT_GNU_versym / .gnu.version]'s sh_addr & sh_offset
 			dyn_versym = dyn
 		end
-		
+
 		print()
-	end	
+	end
 end
 
 if dyn_verneed and shdr_verneed then
@@ -534,45 +544,6 @@ while n < shdr.sh_size do
 end
 --]=]
 
-if shdr_versym then
-	--[[ TODO this is wrong
-	if shdr_verneed then
-		assert.eq(shdr_verneed.sh_size % ffi.sizeof'Elf64_Verneed', 0)
-
-		print'VerNeed:'
-		local vnptr = elfdataptr + shdr_verneed.sh_offset
-		-- TODO do we go by verneed_count or do we go by vn_next?
-		local verneed_count = tonumber(shdr_verneed.sh_size / ffi.sizeof'Elf64_Verneed')
-		for i=0,verneed_count-1 do
-			local verneed = ffi.cast('Elf64_Verneed*', vnptr)
-			io.write(' #'..i)
-			for _,field in ipairs{'vn_version', 'vn_cnt', 'vn_file', 'vn_aux', 'vn_next'} do
-				io.write' '
-				writeField(verneed, field)
-			end
-			print()
-
-			-- vn_aux points to an Elf64_Vernaux structure ...
-			-- and those have more stuff in them
-
-			if verneed.vn_next == 0 then break end
-			vnptr = vnptr + verneed.vn_next
-			-- vn_next is offeset to next entry or what?
-		end
-	end
-	--]]
-
-	local versym = ffi.cast('Elf64_Versym*', elfdataptr + shdr_versym.sh_offset)
-
-	print()
-	print'Versions:'
-	local count = tonumber(shdr_versym.sh_size / shdr_versym.sh_entsize)
-	for i=0,count-1 do
-		print(' #'..i..' '..versym[i])
-		-- where is versym[i] an offset into?
-	end
-end
-
 -- https://compilepeace.github.io/BINARY_DISSECTION_COURSE/ELF/SYMBOLS/SYMBOLS.html
 -- SHT_DYNSYM/.dynsym + SHT_STRTAB/.dynstr
 if shdr_dynsym 		-- = list of symbols
@@ -581,54 +552,146 @@ then
 	local dynsym = ffi.cast('GElf_Sym*', elfdataptr + shdr_dynsym.sh_offset)
 	local dynsym_size = shdr_dynsym.sh_size
 	local count = tonumber(dynsym_size/ffi.sizeof'GElf_Sym')
+
+	local versyms
+	if shdr_versym then
+		versyms = ffi.cast('Elf64_Versym*', elfdataptr + shdr_versym.sh_offset)
+		local versym_count = tonumber(shdr_versym.sh_size / shdr_versym.sh_entsize)
+		assert.eq(versym_count, count, "shdr_versym count dosen't match shdr_dynsym count")
+	end
+
 	-- this is true in static header.  is it true here too?  yup.  coincidence?
+	-- if it is a coincidence and ever fails, go back to using shdr_dynstr
 	local shdr_strs = shdrs + shdr_dynsym.sh_link
 	local strs = elfdataptr + shdr_strs.sh_offset
+
 	print()
 	print'SHT_DYNSYM/.dynsym:'
 	for i=0,count-1 do
 		local p = dynsym[i]
-		io.write(' #'..i..' ')
-		for _,field in ipairs{'st_name', 'st_info', 'st_other', 'st_shndx', 'st_value', 'st_size'} do
+		io.write(' #'..i)
+		for _,field in ipairs{'st_name', 'st_info', 'st_other', 'st_value', 'st_size'} do
 			io.write' '
 			writeField(p, field)
 		end
+		-- in objdump -T:
+		-- st_shndx is flags:
+		-- overall .st_shndx == 0 <-> *UND*
+		-- otherwise 'g' is set and the value is the shdr #
+		-- st_info is flags:
+		-- 0x20 = 'w'
+		-- 0x10 = 'D'
+		-- 0x03 == 2 = 'F'
+		-- 0x03 == 1 = 'O'
+
 		io.write(' '..ffi.string(strs + p.st_name))
+
+		local shndx = p.st_shndx
+		io.write' '
+		writeField(p, 'st_shndx')
+		if shndx > 0 then
+			io.write('/'..getSectionHeaderName(shndx))
+		end
+
+		if versyms then
+			local versym = versyms[i]
+			-- versym == 0 shows up as none
+			-- versym == 1 shows up as base
+			-- versym > 1 is dif names
+			if versym == 0 then
+			elseif versym == 1 then
+				io.write(' versym=base')
+			else
+				io.write(' versym='..versym)
+			end
+
+			--[[ TESTING: downgrade the 2.38 to 2.34
+			if versym == 9 then
+				--versyms[i] = 4	-- fmod not in 2.34
+				--versyms[i] = 6	-- fmod not in 2.29
+				--versyms[i] = 10	-- fmod not in 2.14
+				--versyms[i] = 7	-- fmod not in 2.7
+				versyms[i] = 2
+			end
+			--]]
+		end
+
+		--[[
+		the max versym is 10.  even if #0 and #1 are resreved, that's still a lot more than verneednum=3 ...
+		it corresponds to this info in ldd -v:
+		-- ldd output order:
+		#8	libgcc_s.so.1 (GCC_3.3) => /lib/x86_64-linux-gnu/libgcc_s.so.1
+		#5	libgcc_s.so.1 (GCC_3.0) => /lib/x86_64-linux-gnu/libgcc_s.so.1
+		#10	libc.so.6 (GLIBC_2.14) => /lib/x86_64-linux-gnu/libc.so.6
+		#7	libc.so.6 (GLIBC_2.7) => /lib/x86_64-linux-gnu/libc.so.6
+		#4	libc.so.6 (GLIBC_2.34) => /lib/x86_64-linux-gnu/libc.so.6
+		#3	libc.so.6 (GLIBC_2.2.5) => /lib/x86_64-linux-gnu/libc.so.6
+		#9	libm.so.6 (GLIBC_2.38) => /lib/x86_64-linux-gnu/libm.so.6
+		#6	libm.so.6 (GLIBC_2.29) => /lib/x86_64-linux-gnu/libm.so.6
+		#2	libm.so.6 (GLIBC_2.2.5) => /lib/x86_64-linux-gnu/libm.so.6
+
+		-- in version order:
+		#3	libc.so.6 (GLIBC_2.2.5) => /lib/x86_64-linux-gnu/libc.so.6
+		#2	libm.so.6 (GLIBC_2.2.5) => /lib/x86_64-linux-gnu/libm.so.6
+		#7	libc.so.6 (GLIBC_2.7) => /lib/x86_64-linux-gnu/libc.so.6
+		#10	libc.so.6 (GLIBC_2.14) => /lib/x86_64-linux-gnu/libc.so.6
+		#6	libm.so.6 (GLIBC_2.29) => /lib/x86_64-linux-gnu/libm.so.6
+		#4	libc.so.6 (GLIBC_2.34) => /lib/x86_64-linux-gnu/libc.so.6
+		#9	libm.so.6 (GLIBC_2.38) => /lib/x86_64-linux-gnu/libm.so.6
+		#5	libgcc_s.so.1 (GCC_3.0) => /lib/x86_64-linux-gnu/libgcc_s.so.1
+		#8	libgcc_s.so.1 (GCC_3.3) => /lib/x86_64-linux-gnu/libgcc_s.so.1
+		--]]
+		print()
+	end
+end
+
+if shdr_verneed then
+	local count = shdr_verneed.sh_info
+	local shdr_strs = shdrs + shdr_verneed.sh_link
+	local strs = elfdataptr + shdr_strs.sh_offset
+	print()
+	print'SHT_GNU_verneed:'
+	--local verneeds = ffi.cast('GElf_Verneed*', elfdataptr + shdr_verneed.sh_offset)
+	--local verneed = verneeds + i
+	local p = elfdataptr + shdr_verneed.sh_offset
+	for i=0,count-1 do
+		--local verneed = verneeds + i
+		local verneed = ffi.cast('GElf_Verneed*', p)
+		io.write(' #'..i)
+		for _,field in ipairs{
+			'vn_version', 	-- always 1?
+			--'vn_cnt', 'vn_aux', 'vn_next'	-- redundant?
+		} do
+			io.write' '
+			writeField(verneed, field)
+		end
+		io.write' '
+		writeField(verneed, 'vn_file')
+		io.write(' '..ffi.string(strs + verneed.vn_file))
 		print()
 
-		if shdr_versym then
-
---[[
-			-- TODO assert shdr[SHT_GNU_versym] points to the same place that shdr[SHT_DYNAMIC]'s DT_VERSYM points to
-			-- TODO assert shdr[SHT_GNU_verneed] points to the same place that shdr[SHT_DYNAMIC]'s DT_VERNEED points to
-
-			local versym = ffi.cast('GElf_Versym*', elfdataptr + shdr_versym.sh_offset) + i
-			local verneed = ffi.cast('GElf_Verneed*', elfdataptr + shdr_verneed.sh_offset) + versym[0]
-
-			io.write(' verneed: '..tostring(verneed)..' ')
-			for _,field in ipairs{'vn_version', 'vn_cnt', 'vn_file', 'vn_aux', 'vn_next'} do
+		local p2 = p + verneed.vn_aux
+		for j=0,verneed.vn_cnt-1 do
+			local vernaux = ffi.cast('GElf_Vernaux*', p2)
+			io.write('  #'..j)
+			for _,field in ipairs{'vna_hash', 'vna_flags', 'vna_other',
+				-- 'vna_name', 'vna_next'	-- redundant
+			} do
 				io.write' '
-				writeField(verneed, field)
+				writeField(vernaux, field)
 			end
+			io.write(' '..ffi.string(strs + vernaux.vna_name))
 			print()
---]]
---[[
-			local verdef = ffi.cast('GElf_Verdef*', elfdataptr + shdr_versym.sh_offset) + i
 
-			io.write(' verdef: ')
-			for _,field in ipairs{'vd_version', 'vd_flags', 'vd_ndx', 'vd_cnt', 'vd_hash', 'vd_aux', 'vd_next'} do
-				io.write' '
-				writeField(verdef, field)
-			end
-			print()
---]]
+			p2 = p2 + vernaux.vna_next
 		end
+
+		p = p + verneed.vn_next
 	end
 end
 
 -- SHT_STRTAB/.strtab + SHT_SYMTAB/.symtab
 if shdr_symtab then	-- = list of symbols
---shdr_strtab = where to find their name strings, but that is also specified in shdr_symtab.sh_link, so we don't have to track this one specifically
 	local symtab = ffi.cast('GElf_Sym*', elfdataptr + shdr_symtab.sh_offset)
 	local symtab_size = shdr_symtab.sh_size
 	local symtab_count = shdr_symtab.sh_size / shdr_symtab.sh_entsize
@@ -688,3 +751,5 @@ elf.elf_end(elfHandle)
 
 print()
 print'DONE'
+
+path'luajit-hacked':write(elfdatastr)
