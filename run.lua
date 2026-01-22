@@ -10,7 +10,7 @@ local assert = require 'ext.assert'
 local table = require 'ext.table'
 local path = require 'ext.path'
 local string = require 'ext.string'
-local elf = require 'ffi.req' 'elf'
+local elf = require 'elf.ffi.elf'
 local tolua = require 'ext.tolua'
 require 'ffi.req' 'c.fcntl'
 
