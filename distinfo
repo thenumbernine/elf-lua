@@ -12,7 +12,7 @@ deps = {
 	"ffi",
 }
 
-generateBindings = {
+generateBindings = function()return{
 	{	-- libelf
 		inc = '<gelf.h>',		-- gelf.h -> libelf.h -> elf.h
 		moreincs = {
@@ -33,4 +33,4 @@ generateBindings = {
 			return code
 		end,
 	},
-}
+}end
