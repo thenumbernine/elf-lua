@@ -4,8 +4,9 @@
 
 name = "elf"
 files = {
-	["run.lua"] = "elf/run.lua",
-	["ffi/elf.lua"] = "elf/ffi/elf.lua",
+	"distinfo",
+	"ffi/elf.lua",
+	"run.lua",
 }
 deps = {
 	"ext",
